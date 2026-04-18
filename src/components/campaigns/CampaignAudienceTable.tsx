@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -41,7 +41,7 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaign_contacts")
-        .select("id, contact_id, account_id, contacts(contact_name, email, position, linkedin)")
+        .select("id, contact_id, account_id, contacts(contact_name, email, position, linkedin, industry, phone_no)")
         .eq("campaign_id", campaignId);
       if (error) throw error;
       return data;
@@ -50,6 +50,26 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
 
   const existingAccountIds = useMemo(() => campaignAccounts.map((ca: any) => ca.account_id), [campaignAccounts]);
   const existingContactIds = useMemo(() => campaignContacts.map((cc: any) => cc.contact_id), [campaignContacts]);
+
+  // Realtime sync: invalidate queries when contacts/accounts/campaign membership changes
+  useEffect(() => {
+    const invalidate = () => {
+      queryClient.invalidateQueries({ queryKey: ["campaign-audience-accounts", campaignId] });
+      queryClient.invalidateQueries({ queryKey: ["campaign-audience-contacts", campaignId] });
+    };
+
+    const channel = supabase
+      .channel(`campaign-audience-${campaignId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "contacts" }, invalidate)
+      .on("postgres_changes", { event: "*", schema: "public", table: "accounts" }, invalidate)
+      .on("postgres_changes", { event: "*", schema: "public", table: "campaign_contacts", filter: `campaign_id=eq.${campaignId}` }, invalidate)
+      .on("postgres_changes", { event: "*", schema: "public", table: "campaign_accounts", filter: `campaign_id=eq.${campaignId}` }, invalidate)
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [campaignId, queryClient]);
 
   const filteredAccounts = campaignAccounts;
 
@@ -81,8 +101,13 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
 
   const ContactRow = ({ cc }: { cc: any }) => (
     <TableRow className="bg-background/50">
-      <TableCell className="pl-10 text-sm">{cc.contacts?.contact_name || "—"}</TableCell>
-      <TableCell className="text-sm text-muted-foreground">—</TableCell>
+      <TableCell className="pl-10 text-sm">
+        <div>{cc.contacts?.contact_name || "—"}</div>
+        {cc.contacts?.phone_no && (
+          <div className="text-xs text-muted-foreground mt-0.5">{cc.contacts.phone_no}</div>
+        )}
+      </TableCell>
+      <TableCell className="text-sm text-muted-foreground">{cc.contacts?.industry || "—"}</TableCell>
       <TableCell className="text-sm text-muted-foreground">{cc.contacts?.position || "—"}</TableCell>
       <TableCell className="text-sm text-muted-foreground">{cc.contacts?.email || "—"}</TableCell>
       <TableCell>
