@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
+import { useSecurityAudit } from "@/hooks/useSecurityAudit";
 import type { Tables } from "@/integrations/supabase/types";
 
 export type Campaign = Tables<"campaigns">;
@@ -26,6 +27,7 @@ export interface CampaignFormData {
 export function useCampaigns() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { logSecurityEvent } = useSecurityAudit();
 
   const campaignsQuery = useQuery({
     queryKey: ["campaigns"],
@@ -39,19 +41,21 @@ export function useCampaigns() {
       return data as Campaign[];
     },
     enabled: !!user,
+    staleTime: 2 * 60 * 1000,
   });
 
-  // Fetch MART status for all campaigns (for list page MART column)
-  const martQuery = useQuery({
+  // Fetch Strategy status for all campaigns (for list page Strategy column)
+  const strategyQuery = useQuery({
     queryKey: ["campaign-mart-all"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaign_mart")
-        .select("*");
+        .select("campaign_id,message_done,audience_done,region_done,timing_done");
       if (error) throw error;
       return data;
     },
     enabled: !!user,
+    staleTime: 2 * 60 * 1000,
   });
 
   const createCampaign = useMutation({
@@ -78,11 +82,11 @@ export function useCampaigns() {
         });
       if (error) throw error;
 
-      // Auto-create campaign_mart row
-      const { error: martError } = await supabase
+      // Auto-create campaign_mart row (Strategy progress tracking)
+      const { error: strategyError } = await supabase
         .from("campaign_mart")
         .insert({ campaign_id: newId });
-      if (martError) console.error("Failed to create campaign_mart row:", martError);
+      if (strategyError) console.error("Failed to create strategy row:", strategyError);
 
       return { id: newId };
     },
@@ -122,7 +126,8 @@ export function useCampaigns() {
       const { error } = await supabase.from("campaigns").delete().eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onSuccess: (_: any, id: string) => {
+      logSecurityEvent('DELETE', 'campaigns', id, { operation: 'PERMANENT_DELETE', status: 'Success' });
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
       toast({ title: "Campaign deleted" });
     },
@@ -139,7 +144,8 @@ export function useCampaigns() {
         .eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onSuccess: (_: any, id: string) => {
+      logSecurityEvent('ARCHIVE', 'campaigns', id, { operation: 'ARCHIVE', status: 'Success' });
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
       queryClient.invalidateQueries({ queryKey: ["archived-campaigns"] });
       toast({ title: "Campaign archived" });
@@ -157,7 +163,8 @@ export function useCampaigns() {
         .eq("id", id);
       if (error) throw error;
     },
-    onSuccess: () => {
+    onSuccess: (_: any, id: string) => {
+      logSecurityEvent('RESTORE', 'campaigns', id, { operation: 'RESTORE', status: 'Success' });
       queryClient.invalidateQueries({ queryKey: ["campaigns"] });
       queryClient.invalidateQueries({ queryKey: ["archived-campaigns"] });
       toast({ title: "Campaign restored" });
@@ -215,7 +222,7 @@ export function useCampaigns() {
         });
       if (insertErr) throw insertErr;
 
-      // 3. Clone MART (reset all flags)
+      // 3. Clone Strategy progress (reset all flags)
       await supabase.from("campaign_mart").insert({ campaign_id: newId });
 
       // 4. Clone email templates
@@ -303,11 +310,11 @@ export function useCampaigns() {
     },
   });
 
-  // Compute MART progress for each campaign at list level
-  const getMartProgress = (campaignId: string) => {
-    const mart = martQuery.data?.find((m) => m.campaign_id === campaignId);
-    if (!mart) return { count: 0, total: 4 };
-    const count = [mart.message_done, mart.audience_done, mart.region_done, mart.timing_done].filter(Boolean).length;
+  // Compute Strategy progress for each campaign at list level
+  const getStrategyProgress = (campaignId: string) => {
+    const row = strategyQuery.data?.find((m) => m.campaign_id === campaignId);
+    if (!row) return { count: 0, total: 4 };
+    const count = [row.message_done, row.audience_done, row.region_done, row.timing_done].filter(Boolean).length;
     return { count, total: 4 };
   };
 
@@ -322,13 +329,36 @@ export function useCampaigns() {
     archiveCampaign,
     restoreCampaign,
     cloneCampaign,
-    getMartProgress,
+    getStrategyProgress,
   };
 }
 
-export function useCampaignDetail(campaignId: string | undefined) {
+export interface CampaignDetailEnabledTabs {
+  /** Overview tab needs accounts, contacts, communications */
+  overview?: boolean;
+  /** Setup tab needs accounts, contacts, email templates, phone scripts, materials */
+  setup?: boolean;
+  /** Monitoring tab needs communications + accounts/contacts for filters */
+  monitoring?: boolean;
+  /** Action items tab needs nothing extra */
+  actionItems?: boolean;
+}
+
+export function useCampaignDetail(
+  campaignId: string | undefined,
+  enabled: CampaignDetailEnabledTabs = { overview: true, setup: true, monitoring: true, actionItems: true }
+) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+
+  const baseEnabled = !!user && !!campaignId;
+  // Aggregate gates: which datasets need to be loaded based on which tabs are enabled
+  const needAccounts = baseEnabled && (enabled.overview || enabled.setup || enabled.monitoring);
+  const needContacts = baseEnabled && (enabled.overview || enabled.setup || enabled.monitoring);
+  const needCommunications = baseEnabled && (enabled.overview || enabled.monitoring);
+  const needEmailTemplates = baseEnabled && enabled.setup;
+  const needPhoneScripts = baseEnabled && enabled.setup;
+  const needMaterials = baseEnabled && enabled.setup;
 
   const campaignQuery = useQuery({
     queryKey: ["campaign", campaignId],
@@ -341,11 +371,11 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data as Campaign;
     },
-    enabled: !!user && !!campaignId,
+    enabled: baseEnabled,
   });
 
-  // MART state from explicit table
-  const martQuery = useQuery({
+  // Strategy state from explicit table
+  const strategyQuery = useQuery({
     queryKey: ["campaign-mart", campaignId],
     queryFn: async () => {
       const { data, error } = await supabase
@@ -356,7 +386,7 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!user && !!campaignId,
+    enabled: baseEnabled,
   });
 
   const accountsQuery = useQuery({
@@ -369,7 +399,7 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!user && !!campaignId,
+    enabled: needAccounts,
   });
 
   const contactsQuery = useQuery({
@@ -382,7 +412,7 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!user && !!campaignId,
+    enabled: needContacts,
   });
 
   const communicationsQuery = useQuery({
@@ -396,7 +426,7 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!user && !!campaignId,
+    enabled: needCommunications,
   });
 
   const emailTemplatesQuery = useQuery({
@@ -409,7 +439,7 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!user && !!campaignId,
+    enabled: needEmailTemplates,
   });
 
   const phoneScriptsQuery = useQuery({
@@ -422,7 +452,7 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!user && !!campaignId,
+    enabled: needPhoneScripts,
   });
 
   const materialsQuery = useQuery({
@@ -435,20 +465,20 @@ export function useCampaignDetail(campaignId: string | undefined) {
       if (error) throw error;
       return data;
     },
-    enabled: !!user && !!campaignId,
+    enabled: needMaterials,
   });
 
-  // MART completion from explicit flags
-  const mart = martQuery.data;
-  const isMARTComplete = {
-    message: mart?.message_done ?? false,
-    audience: mart?.audience_done ?? false,
-    region: mart?.region_done ?? false,
-    timing: mart?.timing_done ?? false,
+  // Strategy completion from explicit flags
+  const strategyRow = strategyQuery.data;
+  const isStrategyComplete = {
+    message: strategyRow?.message_done ?? false,
+    audience: strategyRow?.audience_done ?? false,
+    region: strategyRow?.region_done ?? false,
+    timing: strategyRow?.timing_done ?? false,
   };
 
-  const martProgress = Object.values(isMARTComplete).filter(Boolean).length;
-  const isFullyMARTComplete = martProgress === 4;
+  const strategyProgress = Object.values(isStrategyComplete).filter(Boolean).length;
+  const isFullyStrategyComplete = strategyProgress === 4;
 
   // Campaign ended check — compare date strings to avoid timezone issues
   const isCampaignEnded = campaignQuery.data?.end_date
@@ -459,11 +489,11 @@ export function useCampaignDetail(campaignId: string | undefined) {
     ? Math.max(0, Math.ceil((new Date(campaignQuery.data.end_date + "T00:00:00").getTime() - new Date(new Date().toISOString().split("T")[0] + "T00:00:00").getTime()) / (1000 * 60 * 60 * 24)))
     : null;
 
-  // Update MART flag
-  const updateMartFlag = async (flag: string, value: boolean) => {
+  // Update Strategy flag
+  const updateStrategyFlag = async (flag: string, value: boolean) => {
     if (!campaignId) return;
 
-    // Ensure MART row exists
+    // Ensure strategy row exists
     const { data: existing } = await supabase
       .from("campaign_mart")
       .select("campaign_id")
@@ -471,9 +501,9 @@ export function useCampaignDetail(campaignId: string | undefined) {
       .maybeSingle();
 
     if (!existing) {
-      await supabase.from("campaign_mart").insert({ campaign_id: campaignId, [flag]: value });
+      await supabase.from("campaign_mart").insert({ campaign_id: campaignId, [flag]: value } as any);
     } else {
-      await supabase.from("campaign_mart").update({ [flag]: value }).eq("campaign_id", campaignId);
+      await supabase.from("campaign_mart").update({ [flag]: value } as any).eq("campaign_id", campaignId);
     }
 
     // Check if all 4 are now done
@@ -497,18 +527,18 @@ export function useCampaignDetail(campaignId: string | undefined) {
   return {
     campaign: campaignQuery.data,
     isLoading: campaignQuery.isLoading,
-    mart: martQuery.data,
+    strategy: strategyQuery.data,
     accounts: accountsQuery.data || [],
     contacts: contactsQuery.data || [],
     communications: communicationsQuery.data || [],
     emailTemplates: emailTemplatesQuery.data || [],
     phoneScripts: phoneScriptsQuery.data || [],
     materials: materialsQuery.data || [],
-    isMARTComplete,
-    martProgress,
-    isFullyMARTComplete,
+    isStrategyComplete,
+    strategyProgress,
+    isFullyStrategyComplete,
     isCampaignEnded,
     daysRemaining,
-    updateMartFlag,
+    updateStrategyFlag,
   };
 }

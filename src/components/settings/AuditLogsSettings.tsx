@@ -269,7 +269,7 @@ const AuditLogsSettings = () => {
           if (change && typeof change === 'object' && 'old' in change) oldData[field] = change.old;
         });
         if (Object.keys(oldData).length === 0) throw new Error('No revertible data found');
-        const { error } = await supabase.from(resource_type).update(oldData).eq('id', resource_id);
+        const { error } = await supabase.from(resource_type).update(oldData as any).eq('id', resource_id);
         if (error) throw error;
         toast({ title: "Success", description: `${resource_type} record reverted` });
       } else if (action === 'CREATE') {

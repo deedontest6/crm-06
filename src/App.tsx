@@ -7,21 +7,39 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import { useAuth } from "@/hooks/useAuth";
 import SecurityEnhancedApp from "@/components/SecurityEnhancedApp";
 import { AppSidebar } from "@/components/AppSidebar";
-import Dashboard from "./pages/Dashboard";
-import Accounts from "./pages/Accounts";
-import Contacts from "./pages/Contacts";
-// Leads module removed - leads are now managed under Deals Lead stage
-import DealsPage from "./pages/DealsPage";
-import Campaigns from "./pages/Campaigns";
-import CampaignDetail from "./pages/CampaignDetail";
-import ActionItems from "./pages/ActionItems";
-import Settings from "./pages/Settings";
-import Auth from "./pages/Auth";
-import NotFound from "./pages/NotFound";
-import Notifications from "./pages/Notifications";
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 
-const queryClient = new QueryClient();
+// Eager: most-common landing pages
+import Dashboard from "./pages/Dashboard";
+import Auth from "./pages/Auth";
+
+// Lazy: everything else (huge code-split win)
+const Accounts = lazy(() => import("./pages/Accounts"));
+const Contacts = lazy(() => import("./pages/Contacts"));
+const DealsPage = lazy(() => import("./pages/DealsPage"));
+const Campaigns = lazy(() => import("./pages/Campaigns"));
+const CampaignDetail = lazy(() => import("./pages/CampaignDetail"));
+const ActionItems = lazy(() => import("./pages/ActionItems"));
+const Settings = lazy(() => import("./pages/Settings"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const Notifications = lazy(() => import("./pages/Notifications"));
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      gcTime: 10 * 60 * 1000, // 10 minutes
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
+
+const RouteFallback = () => (
+  <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+  </div>
+);
 
 // Layout Component for all pages with fixed sidebar
 const FixedSidebarLayout = ({ children }: { children: React.ReactNode }) => {
@@ -46,7 +64,9 @@ const FixedSidebarLayout = ({ children }: { children: React.ReactNode }) => {
         }}
       >
         <div className={`w-full h-full min-h-0 ${needsControlledScroll ? 'overflow-hidden' : 'overflow-auto'}`}>
-          {children}
+          <Suspense fallback={<RouteFallback />}>
+            {children}
+          </Suspense>
         </div>
       </main>
     </div>
@@ -72,7 +92,6 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     return <Navigate to="/auth" replace />;
   }
 
-  // Use FixedSidebarLayout for all protected routes
   return (
     <FixedSidebarLayout>
       {children}
@@ -102,66 +121,20 @@ const AuthRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
-// App Router Component - inside the auth context
 const AppRouter = () => (
   <BrowserRouter>
     <Routes>
-      <Route path="/auth" element={
-        <AuthRoute>
-          <Auth />
-        </AuthRoute>
-      } />
-      <Route path="/" element={
-        <ProtectedRoute>
-          <Dashboard />
-        </ProtectedRoute>
-      } />
-      <Route path="/accounts" element={
-        <ProtectedRoute>
-          <Accounts />
-        </ProtectedRoute>
-      } />
-      <Route path="/contacts" element={
-        <ProtectedRoute>
-          <Contacts />
-        </ProtectedRoute>
-      } />
-      
-      <Route path="/deals" element={
-        <ProtectedRoute>
-          <DealsPage />
-        </ProtectedRoute>
-      } />
-      <Route path="/campaigns" element={
-        <ProtectedRoute>
-          <Campaigns />
-        </ProtectedRoute>
-      } />
-      <Route path="/campaigns/:id" element={
-        <ProtectedRoute>
-          <CampaignDetail />
-        </ProtectedRoute>
-      } />
-      <Route path="/action-items" element={
-        <ProtectedRoute>
-          <ActionItems />
-        </ProtectedRoute>
-      } />
-      <Route path="/notifications" element={
-        <ProtectedRoute>
-          <Notifications />
-        </ProtectedRoute>
-      } />
-      <Route path="/settings" element={
-        <ProtectedRoute>
-          <Settings />
-        </ProtectedRoute>
-      } />
-      <Route path="*" element={
-        <ProtectedRoute>
-          <NotFound />
-        </ProtectedRoute>
-      } />
+      <Route path="/auth" element={<AuthRoute><Auth /></AuthRoute>} />
+      <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
+      <Route path="/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
+      <Route path="/deals" element={<ProtectedRoute><DealsPage /></ProtectedRoute>} />
+      <Route path="/campaigns" element={<ProtectedRoute><Campaigns /></ProtectedRoute>} />
+      <Route path="/campaigns/:id" element={<ProtectedRoute><CampaignDetail /></ProtectedRoute>} />
+      <Route path="/action-items" element={<ProtectedRoute><ActionItems /></ProtectedRoute>} />
+      <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="*" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
     </Routes>
   </BrowserRouter>
 );

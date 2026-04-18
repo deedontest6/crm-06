@@ -74,14 +74,22 @@ export function useActionItems(initialFilters?: Partial<ActionItemFilters>) {
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['action_items', filters],
+    queryKey: [
+      'action_items',
+      filters.module_type,
+      filters.priority,
+      filters.status,
+      filters.assigned_to,
+      filters.search,
+      filters.showArchived,
+    ],
     queryFn: async () => {
       let query = supabase
         .from('action_items')
         .select('*')
         .order('due_date', { ascending: true, nullsFirst: false })
         .order('created_at', { ascending: false })
-        .limit(5000);
+        .limit(500);
 
       if (filters.module_type !== 'all') {
         query = query.eq('module_type', filters.module_type);

@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Plus, Upload, Download, Columns, MoreVertical, Search, Filter, Trash2, X, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +18,6 @@ const Accounts = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [ownerFilter, setOwnerFilter] = useState<string>("all");
-  const [ownerIds, setOwnerIds] = useState<string[]>([]);
   const [showColumnCustomizer, setShowColumnCustomizer] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [selectedAccounts, setSelectedAccounts] = useState<string[]>([]);
@@ -28,17 +28,16 @@ const Accounts = () => {
     setRefreshTrigger(prev => prev + 1);
   });
 
-  // Fetch distinct owners
-  useEffect(() => {
-    const fetchOwners = async () => {
+  // Distinct account owners — cached for 5 min, refetched only when refreshTrigger changes
+  const { data: ownerIds = [] } = useQuery({
+    queryKey: ['account-owners', refreshTrigger],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
       const { data } = await supabase.from('accounts').select('account_owner');
-      if (data) {
-        const unique = [...new Set(data.map(d => d.account_owner).filter(Boolean))] as string[];
-        setOwnerIds(unique);
-      }
-    };
-    fetchOwners();
-  }, [refreshTrigger]);
+      if (!data) return [] as string[];
+      return [...new Set(data.map(d => d.account_owner).filter(Boolean))] as string[];
+    },
+  });
 
   const { displayNames } = useUserDisplayNames(ownerIds);
 

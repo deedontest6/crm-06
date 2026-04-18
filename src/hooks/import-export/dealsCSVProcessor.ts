@@ -130,7 +130,7 @@ export class DealsCSVProcessor {
           dealId = existingDeals[0].id;
           const { error: updateError } = await supabase
             .from('deals')
-            .update(dealRecord)
+            .update(dealRecord as any)
             .eq('id', dealId);
 
           if (updateError) {

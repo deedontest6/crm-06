@@ -246,7 +246,7 @@ export function CampaignContacts({ campaignId, isCampaignEnded, campaignName, ca
     if (isCampaignEnded) { toast({ title: "Campaign ended", description: "Outreach is closed.", variant: "destructive" }); return; }
     const regularTemplates = emailTemplates.filter((t) => t.email_type !== "LinkedIn-Connection" && t.email_type !== "LinkedIn-Followup");
     if (regularTemplates.length === 0) {
-      toast({ title: "No templates", description: "Add email templates in MART → Message first.", variant: "destructive" });
+      toast({ title: "No templates", description: "Add email templates in Setup → Message first.", variant: "destructive" });
       return;
     }
     setSlideContact(cc);
@@ -280,25 +280,42 @@ export function CampaignContacts({ campaignId, isCampaignEnded, campaignName, ca
     setEmailForm({ template_id: templateId, subject: tmpl.subject || "", body, signature: sig });
   };
 
-  // --- Send Email ---
+  // --- Send Email via Edge Function ---
   const handleSendEmail = async () => {
     if (!slideContact) return;
-    await supabase.from("campaign_communications").insert({
-      campaign_id: campaignId, contact_id: slideContact.contact_id, account_id: slideContact.account_id,
-      communication_type: "Email", subject: emailForm.subject, body: emailForm.body,
-      email_status: "Sent", owner: user!.id, created_by: user!.id,
-      communication_date: new Date().toISOString(),
-    });
-    // Rank-based MAX stage
-    const currentRank = stageRanks[slideContact.stage || "Not Contacted"] ?? 0;
-    if (1 > currentRank) {
-      await supabase.from("campaign_contacts").update({ stage: "Email Sent" }).eq("campaign_id", campaignId).eq("contact_id", slideContact.contact_id);
+    if (!slideContact.contacts?.email) {
+      toast({ title: "No email address", variant: "destructive" }); return;
     }
-    if (slideContact.account_id) await recomputeAccountStatus(campaignId, slideContact.account_id, queryClient);
-    queryClient.invalidateQueries({ queryKey: ["campaign-contacts", campaignId] });
-    queryClient.invalidateQueries({ queryKey: ["campaign-communications", campaignId] });
-    setEmailSlideOpen(false);
-    toast({ title: `Email sent to ${slideContact.contacts?.contact_name || "contact"}` });
+    try {
+      const { data, error } = await supabase.functions.invoke("send-campaign-email", {
+        body: {
+          campaign_id: campaignId,
+          contact_id: slideContact.contact_id,
+          account_id: slideContact.account_id || undefined,
+          template_id: emailForm.template_id || undefined,
+          subject: emailForm.subject,
+          body: emailForm.body,
+          recipient_email: slideContact.contacts.email,
+          recipient_name: slideContact.contacts.contact_name,
+        },
+      });
+      if (error) throw error;
+      if (!data?.success) {
+        toast({ title: "Email send failed", description: data?.error || "Unknown error", variant: "destructive" }); return;
+      }
+      // Rank-based MAX stage
+      const currentRank = stageRanks[slideContact.stage || "Not Contacted"] ?? 0;
+      if (1 > currentRank) {
+        await supabase.from("campaign_contacts").update({ stage: "Email Sent" }).eq("campaign_id", campaignId).eq("contact_id", slideContact.contact_id);
+      }
+      if (slideContact.account_id) await recomputeAccountStatus(campaignId, slideContact.account_id, queryClient);
+      queryClient.invalidateQueries({ queryKey: ["campaign-contacts", campaignId] });
+      queryClient.invalidateQueries({ queryKey: ["campaign-communications", campaignId] });
+      setEmailSlideOpen(false);
+      toast({ title: `Email sent to ${slideContact.contacts?.contact_name || "contact"}` });
+    } catch (err: any) {
+      toast({ title: "Error sending email", description: err.message, variant: "destructive" });
+    }
   };
 
   // --- Log Call ---

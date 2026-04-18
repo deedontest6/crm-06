@@ -1,0 +1,11 @@
+CREATE INDEX IF NOT EXISTS idx_contacts_created_time ON public.contacts (created_time DESC);
+CREATE INDEX IF NOT EXISTS idx_contacts_company_name ON public.contacts (company_name);
+CREATE INDEX IF NOT EXISTS idx_contacts_created_by ON public.contacts (created_by);
+CREATE INDEX IF NOT EXISTS idx_deals_modified_at ON public.deals (modified_at DESC);
+CREATE INDEX IF NOT EXISTS idx_deals_campaign_id ON public.deals (campaign_id) WHERE campaign_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_deals_created_by ON public.deals (created_by);
+CREATE INDEX IF NOT EXISTS idx_camp_comms_campaign ON public.campaign_communications (campaign_id, communication_date DESC);
+CREATE INDEX IF NOT EXISTS idx_camp_contacts_campaign ON public.campaign_contacts (campaign_id);
+CREATE INDEX IF NOT EXISTS idx_camp_accounts_campaign ON public.campaign_accounts (campaign_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_status ON public.notifications (user_id, status) WHERE status = 'unread';
+CREATE INDEX IF NOT EXISTS idx_action_items_status_archived ON public.action_items (status, archived_at);

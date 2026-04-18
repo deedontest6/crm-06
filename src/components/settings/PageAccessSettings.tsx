@@ -50,7 +50,7 @@ const PageAccessSettings = () => {
     try {
       const { error } = await supabase
         .from('page_permissions')
-        .update({ [field]: value })
+        .update({ [field]: value } as any)
         .eq('id', id);
       
       if (error) throw error;

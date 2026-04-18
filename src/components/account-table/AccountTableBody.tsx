@@ -192,7 +192,14 @@ export const AccountTableBody = ({
         </button>
       );
     }
-    return <span className="truncate" title={value as string}>{value || '-'}</span>;
+    if (field === 'description') {
+      return (
+        <span className="line-clamp-2 text-muted-foreground text-xs" title={value as string}>
+          {value || '-'}
+        </span>
+      );
+    }
+    return <span className="truncate block" title={value as string}>{value || '-'}</span>;
   };
 
   const getSortIcon = (field: string) => {
@@ -224,12 +231,12 @@ export const AccountTableBody = ({
                     sortField === column.field && column.field !== 'linked_contacts' && "bg-accent"
                   )}
                   style={{ 
-                    width: column.field === 'linked_contacts' ? '100px' : `${columnWidths[column.field] || 120}px`,
-                    minWidth: column.field === 'account_name' ? '150px' : '60px'
+                    width: column.field === 'linked_contacts' ? '80px' : column.field === 'description' ? '30%' : `${columnWidths[column.field] || 120}px`,
+                    minWidth: column.field === 'account_name' ? '150px' : column.field === 'description' ? '200px' : '60px'
                   }}
                 >
                   {column.field === 'linked_contacts' ? (
-                    <span className="text-sm font-bold">{column.label}</span>
+                    <span className="text-sm font-bold text-center block">{column.label}</span>
                   ) : (
                     <Button variant="ghost" size="sm" className="h-7 -ml-2 text-sm font-bold hover:bg-transparent px-2" onClick={() => onSort(column.field)}>
                       {column.label}
@@ -277,11 +284,12 @@ export const AccountTableBody = ({
                   <TableCell 
                     key={column.field} 
                     className={cn(
-                      'py-3 px-4 text-sm',
-                      column.field === 'account_name' && 'min-w-[300px] max-w-[400px]',
-                      column.field === 'linked_contacts' && 'w-[100px] text-center',
+                      'py-3 px-4 text-sm overflow-hidden',
+                      column.field === 'account_name' && 'min-w-[150px] max-w-[250px]',
+                      column.field === 'description' && 'min-w-[200px] max-w-[350px]',
+                      column.field === 'linked_contacts' && 'w-[80px] text-center',
                       column.field === 'account_owner' && 'whitespace-nowrap',
-                      !['account_name', 'linked_contacts', 'account_owner'].includes(column.field) && 'max-w-[180px]'
+                      !['account_name', 'description', 'linked_contacts', 'account_owner'].includes(column.field) && 'max-w-[180px] truncate'
                     )}
                   >
                     {formatCellValue(account, column.field)}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -135,20 +135,22 @@ export default function ActionItems() {
     setCurrentPage(1);
   }, [filters.module_type, filters.priority, filters.status, filters.assigned_to, filters.search, filters.showArchived]);
 
-  // Sort action items
-  const sortedActionItems = [...actionItems].sort((a, b) => {
-    if (!sortField) return 0;
-    let aValue: any = a[sortField as keyof ActionItem];
-    let bValue: any = b[sortField as keyof ActionItem];
+  // Sort action items (memoized — avoids re-sorting 70+ items on every render)
+  const sortedActionItems = useMemo(() => {
+    return [...actionItems].sort((a, b) => {
+      if (!sortField) return 0;
+      let aValue: any = a[sortField as keyof ActionItem];
+      let bValue: any = b[sortField as keyof ActionItem];
 
-    // Handle null/undefined values
-    if (aValue === null || aValue === undefined) aValue = '';
-    if (bValue === null || bValue === undefined) bValue = '';
+      // Handle null/undefined values
+      if (aValue === null || aValue === undefined) aValue = '';
+      if (bValue === null || bValue === undefined) bValue = '';
 
-    // String comparison
-    const comparison = String(aValue).localeCompare(String(bValue));
-    return sortDirection === 'asc' ? comparison : -comparison;
-  });
+      // String comparison
+      const comparison = String(aValue).localeCompare(String(bValue));
+      return sortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [actionItems, sortField, sortDirection]);
 
   // Pagination calculations
   const totalItems = sortedActionItems.length;
@@ -156,8 +158,11 @@ export default function ActionItems() {
   const startItem = totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const endItem = Math.min(currentPage * pageSize, totalItems);
 
-  // Paginated items for list view
-  const paginatedItems = sortedActionItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  // Paginated items for list view (memoized)
+  const paginatedItems = useMemo(
+    () => sortedActionItems.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [sortedActionItems, currentPage, pageSize]
+  );
 
   // Reset to page 1 when filters change or page size changes
   const handlePageSizeChange = (size: string) => {

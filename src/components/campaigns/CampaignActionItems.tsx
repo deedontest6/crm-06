@@ -16,6 +16,7 @@ import { toast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { useUserDisplayNames } from "@/hooks/useUserDisplayNames";
+import { useCRUDAudit } from "@/hooks/useCRUDAudit";
 
 interface Props {
   campaignId: string;
@@ -30,6 +31,7 @@ const priorityColors: Record<string, string> = {
 export function CampaignActionItems({ campaignId }: Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { logCreate, logUpdate, logDelete } = useCRUDAudit();
   const [showInlineForm, setShowInlineForm] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -122,22 +124,27 @@ export function CampaignActionItems({ campaignId }: Props) {
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     queryClient.invalidateQueries({ queryKey: ["campaign-action-items", campaignId] });
     queryClient.invalidateQueries({ queryKey: ["action-items"] });
+    await logCreate('action_items', '', { title: form.title, module_type: 'campaigns', campaign_id: campaignId });
     setShowInlineForm(false);
     setForm({ title: "", description: "", priority: "Medium", due_date: "", contact_id: "", account_id: "" });
     toast({ title: "Task created" });
   };
 
   const updateStatus = async (id: string, status: string) => {
+    const item = actionItems.find(i => i.id === id);
     await supabase.from("action_items").update({ status }).eq("id", id);
     queryClient.invalidateQueries({ queryKey: ["campaign-action-items", campaignId] });
     queryClient.invalidateQueries({ queryKey: ["action-items"] });
+    await logUpdate('action_items', id, { status }, { status: item?.status });
   };
 
   const confirmDelete = async () => {
     if (!deleteConfirm) return;
+    const item = actionItems.find(i => i.id === deleteConfirm);
     await supabase.from("action_items").delete().eq("id", deleteConfirm);
     queryClient.invalidateQueries({ queryKey: ["campaign-action-items", campaignId] });
     queryClient.invalidateQueries({ queryKey: ["action-items"] });
+    await logDelete('action_items', deleteConfirm, item);
     setDeleteConfirm(null);
     toast({ title: "Task deleted" });
   };
@@ -188,11 +195,12 @@ export function CampaignActionItems({ campaignId }: Props) {
   });
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between flex-wrap gap-2">
-          <CardTitle className="text-base flex items-center gap-2">
-            <CheckSquare className="h-4 w-4" /> Campaign Tasks ({actionItems.length})
+          <CardTitle className="text-sm flex items-center gap-2">
+            <CheckSquare className="h-4 w-4" /> Campaign Action Items
+            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{actionItems.length}</Badge>
           </CardTitle>
           <div className="flex items-center gap-2 flex-wrap">
             <Select value={statusFilter} onValueChange={setStatusFilter}>

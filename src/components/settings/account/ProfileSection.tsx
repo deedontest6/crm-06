@@ -8,38 +8,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { User, Loader2, Trash2, Camera, Sun, Moon, Monitor } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { getFormattedTimezoneList } from '@/utils/countryRegionMapping';
 
-const timezones = [
-  { value: 'Pacific/Midway', label: 'UTC-11:00 Samoa Standard Time (SST)' },
-  { value: 'Pacific/Honolulu', label: 'UTC-10:00 Hawaii-Aleutian Standard Time (HST)' },
-  { value: 'America/Anchorage', label: 'UTC-09:00 Alaska Standard Time (AKST)' },
-  { value: 'America/Los_Angeles', label: 'UTC-08:00 Pacific Standard Time (PST)' },
-  { value: 'America/Denver', label: 'UTC-07:00 Mountain Standard Time (MST)' },
-  { value: 'America/Chicago', label: 'UTC-06:00 Central Standard Time (CST)' },
-  { value: 'America/New_York', label: 'UTC-05:00 Eastern Standard Time (EST)' },
-  { value: 'America/Caracas', label: 'UTC-04:00 Venezuela Time (VET)' },
-  { value: 'America/Sao_Paulo', label: 'UTC-03:00 Brasilia Time (BRT)' },
-  { value: 'Atlantic/South_Georgia', label: 'UTC-02:00 South Georgia Time (GST)' },
-  { value: 'Atlantic/Azores', label: 'UTC-01:00 Azores Time (AZOT)' },
-  { value: 'Europe/London', label: 'UTC+00:00 Greenwich Mean Time (GMT)' },
-  { value: 'Europe/Paris', label: 'UTC+01:00 Central European Time (CET)' },
-  { value: 'Europe/Helsinki', label: 'UTC+02:00 Eastern European Time (EET)' },
-  { value: 'Europe/Moscow', label: 'UTC+03:00 Moscow Standard Time (MSK)' },
-  { value: 'Asia/Dubai', label: 'UTC+04:00 Gulf Standard Time (GST)' },
-  { value: 'Asia/Karachi', label: 'UTC+05:00 Pakistan Standard Time (PKT)' },
-  { value: 'Asia/Kolkata', label: 'UTC+05:30 Indian Standard Time (IST)' },
-  { value: 'Asia/Kathmandu', label: 'UTC+05:45 Nepal Time (NPT)' },
-  { value: 'Asia/Dhaka', label: 'UTC+06:00 Bangladesh Standard Time (BST)' },
-  { value: 'Asia/Yangon', label: 'UTC+06:30 Myanmar Time (MMT)' },
-  { value: 'Asia/Bangkok', label: 'UTC+07:00 Indochina Time (ICT)' },
-  { value: 'Asia/Singapore', label: 'UTC+08:00 Singapore Standard Time (SGT)' },
-  { value: 'Asia/Tokyo', label: 'UTC+09:00 Japan Standard Time (JST)' },
-  { value: 'Australia/Darwin', label: 'UTC+09:30 Australian Central Standard Time (ACST)' },
-  { value: 'Australia/Sydney', label: 'UTC+10:00 Australian Eastern Standard Time (AEST)' },
-  { value: 'Pacific/Noumea', label: 'UTC+11:00 New Caledonia Time (NCT)' },
-  { value: 'Pacific/Auckland', label: 'UTC+12:00 New Zealand Standard Time (NZST)' },
-  { value: 'Pacific/Tongatapu', label: 'UTC+13:00 Tonga Time (TOT)' },
-];
+const timezones = getFormattedTimezoneList();
 
 interface ProfileData {
   full_name: string;

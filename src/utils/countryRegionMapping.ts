@@ -3,6 +3,30 @@
  * Covers 7 geographic regions, ~200 countries, and formatted timezones.
  */
 
+/**
+ * Map UI region names to all DB region codes that should match.
+ * The DB historically stores short codes like "EU", "ASIA", "US" alongside long names.
+ */
+export const REGION_DB_ALIASES: Record<string, string[]> = {
+  "Europe": ["EU", "Europe"],
+  "Asia": ["ASIA", "Asia"],
+  "Middle East": ["ASIA", "Middle East"],
+  "North America": ["US", "North America"],
+  "Africa": ["Africa", "Other"],
+  "Oceania": ["Oceania", "Other"],
+  "South America": ["South America", "Other"],
+};
+
+/** Expand a list of UI region names to all DB codes that should match. */
+export function expandRegionsForDb(regions: string[]): string[] {
+  const out = new Set<string>();
+  for (const r of regions) {
+    const aliases = REGION_DB_ALIASES[r] ?? [r];
+    for (const a of aliases) out.add(a);
+  }
+  return Array.from(out);
+}
+
 // Geographic regions
 export const regions = [
   "Africa",
@@ -190,67 +214,79 @@ const countryAliases: Record<string, string> = {
 };
 
 /**
- * Formatted timezone list for display in dropdowns.
- * Format: "UTC±HH:mm Timezone Name (Abbreviation)"
+ * All IANA timezone identifiers used in this system.
  */
-export const TIMEZONE_LIST: { value: string; label: string }[] = [
-  { value: "Pacific/Midway", label: "UTC-11:00 Samoa Standard Time (SST)" },
-  { value: "Pacific/Honolulu", label: "UTC-10:00 Hawaii Standard Time (HST)" },
-  { value: "America/Anchorage", label: "UTC-09:00 Alaska Standard Time (AKST)" },
-  { value: "America/Los_Angeles", label: "UTC-08:00 Pacific Standard Time (PST)" },
-  { value: "America/Denver", label: "UTC-07:00 Mountain Standard Time (MST)" },
-  { value: "America/Chicago", label: "UTC-06:00 Central Standard Time (CST)" },
-  { value: "America/New_York", label: "UTC-05:00 Eastern Standard Time (EST)" },
-  { value: "America/Caracas", label: "UTC-04:30 Venezuelan Standard Time (VET)" },
-  { value: "America/Halifax", label: "UTC-04:00 Atlantic Standard Time (AST)" },
-  { value: "America/St_Johns", label: "UTC-03:30 Newfoundland Standard Time (NST)" },
-  { value: "America/Argentina/Buenos_Aires", label: "UTC-03:00 Argentina Time (ART)" },
-  { value: "America/Sao_Paulo", label: "UTC-03:00 Brasilia Time (BRT)" },
-  { value: "Atlantic/South_Georgia", label: "UTC-02:00 South Georgia Time (GST)" },
-  { value: "Atlantic/Azores", label: "UTC-01:00 Azores Standard Time (AZOT)" },
-  { value: "UTC", label: "UTC+00:00 Coordinated Universal Time (UTC)" },
-  { value: "Europe/London", label: "UTC+00:00 Greenwich Mean Time (GMT)" },
-  { value: "Europe/Paris", label: "UTC+01:00 Central European Time (CET)" },
-  { value: "Europe/Berlin", label: "UTC+01:00 Central European Time (CET)" },
-  { value: "Africa/Lagos", label: "UTC+01:00 West Africa Time (WAT)" },
-  { value: "Europe/Helsinki", label: "UTC+02:00 Eastern European Time (EET)" },
-  { value: "Africa/Cairo", label: "UTC+02:00 Eastern European Time (EET)" },
-  { value: "Africa/Johannesburg", label: "UTC+02:00 South Africa Standard Time (SAST)" },
-  { value: "Europe/Istanbul", label: "UTC+03:00 Turkey Time (TRT)" },
-  { value: "Europe/Moscow", label: "UTC+03:00 Moscow Standard Time (MSK)" },
-  { value: "Asia/Riyadh", label: "UTC+03:00 Arabian Standard Time (AST)" },
-  { value: "Africa/Nairobi", label: "UTC+03:00 East Africa Time (EAT)" },
-  { value: "Asia/Tehran", label: "UTC+03:30 Iran Standard Time (IRST)" },
-  { value: "Asia/Dubai", label: "UTC+04:00 Gulf Standard Time (GST)" },
-  { value: "Asia/Kabul", label: "UTC+04:30 Afghanistan Time (AFT)" },
-  { value: "Asia/Karachi", label: "UTC+05:00 Pakistan Standard Time (PKT)" },
-  { value: "Asia/Tashkent", label: "UTC+05:00 Uzbekistan Time (UZT)" },
-  { value: "Asia/Kolkata", label: "UTC+05:30 Indian Standard Time (IST)" },
-  { value: "Asia/Kathmandu", label: "UTC+05:45 Nepal Time (NPT)" },
-  { value: "Asia/Dhaka", label: "UTC+06:00 Bangladesh Standard Time (BST)" },
-  { value: "Asia/Almaty", label: "UTC+06:00 Alma-Ata Time (ALMT)" },
-  { value: "Asia/Yangon", label: "UTC+06:30 Myanmar Time (MMT)" },
-  { value: "Asia/Bangkok", label: "UTC+07:00 Indochina Time (ICT)" },
-  { value: "Asia/Jakarta", label: "UTC+07:00 Western Indonesia Time (WIB)" },
-  { value: "Asia/Shanghai", label: "UTC+08:00 China Standard Time (CST)" },
-  { value: "Asia/Singapore", label: "UTC+08:00 Singapore Standard Time (SGT)" },
-  { value: "Asia/Hong_Kong", label: "UTC+08:00 Hong Kong Time (HKT)" },
-  { value: "Australia/Perth", label: "UTC+08:00 Australian Western Standard Time (AWST)" },
-  { value: "Asia/Tokyo", label: "UTC+09:00 Japan Standard Time (JST)" },
-  { value: "Asia/Seoul", label: "UTC+09:00 Korea Standard Time (KST)" },
-  { value: "Australia/Adelaide", label: "UTC+09:30 Australian Central Standard Time (ACST)" },
-  { value: "Australia/Sydney", label: "UTC+10:00 Australian Eastern Standard Time (AEST)" },
-  { value: "Pacific/Guam", label: "UTC+10:00 Chamorro Standard Time (ChST)" },
-  { value: "Pacific/Noumea", label: "UTC+11:00 New Caledonia Time (NCT)" },
-  { value: "Pacific/Auckland", label: "UTC+12:00 New Zealand Standard Time (NZST)" },
-  { value: "Pacific/Fiji", label: "UTC+12:00 Fiji Standard Time (FJT)" },
-  { value: "Pacific/Tongatapu", label: "UTC+13:00 Tonga Standard Time (TOT)" },
-  { value: "Pacific/Kiritimati", label: "UTC+14:00 Line Islands Time (LINT)" },
+export const TIMEZONE_IANA_LIST: string[] = [
+  "Pacific/Midway", "Pacific/Honolulu", "America/Anchorage",
+  "America/Los_Angeles", "America/Denver", "America/Chicago",
+  "America/New_York", "America/Caracas", "America/Halifax",
+  "America/St_Johns", "America/Argentina/Buenos_Aires", "America/Sao_Paulo",
+  "Atlantic/South_Georgia", "Atlantic/Azores", "UTC", "Europe/London",
+  "Europe/Paris", "Europe/Berlin", "Africa/Lagos", "Europe/Helsinki",
+  "Africa/Cairo", "Africa/Johannesburg", "Europe/Istanbul", "Europe/Moscow",
+  "Asia/Riyadh", "Africa/Nairobi", "Asia/Tehran", "Asia/Dubai",
+  "Asia/Kabul", "Asia/Karachi", "Asia/Tashkent", "Asia/Kolkata",
+  "Asia/Kathmandu", "Asia/Dhaka", "Asia/Almaty", "Asia/Yangon",
+  "Asia/Bangkok", "Asia/Jakarta", "Asia/Shanghai", "Asia/Singapore",
+  "Asia/Hong_Kong", "Australia/Perth", "Asia/Tokyo", "Asia/Seoul",
+  "Australia/Adelaide", "Australia/Sydney", "Pacific/Guam",
+  "Pacific/Noumea", "Pacific/Auckland", "Pacific/Fiji",
+  "Pacific/Tongatapu", "Pacific/Kiritimati",
 ];
 
 /**
+ * Compute a dynamic label for an IANA timezone reflecting current DST state.
+ * Returns e.g. "GMT+2 Central European Summer Time"
+ */
+export function getTimezoneLabel(iana: string): string {
+  try {
+    const now = new Date();
+    // Get short offset like "GMT+2"
+    const offsetFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: iana,
+      timeZoneName: "shortOffset",
+    });
+    const offsetParts = offsetFormatter.formatToParts(now);
+    const offsetPart = offsetParts.find(p => p.type === "timeZoneName")?.value || "GMT";
+
+    // Get long name like "Central European Summer Time"
+    const longFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: iana,
+      timeZoneName: "long",
+    });
+    const longParts = longFormatter.formatToParts(now);
+    const longName = longParts.find(p => p.type === "timeZoneName")?.value || iana;
+
+    return `${offsetPart} – ${longName}`;
+  } catch {
+    return iana.replace(/_/g, " ");
+  }
+}
+
+/** Cached formatted timezone list – regenerated once per page load. */
+let _cachedFormattedList: { value: string; label: string }[] | null = null;
+
+/**
+ * Get the full timezone list with dynamically computed labels (DST-aware).
+ */
+export function getFormattedTimezoneList(): { value: string; label: string }[] {
+  if (!_cachedFormattedList) {
+    _cachedFormattedList = TIMEZONE_IANA_LIST.map(iana => ({
+      value: iana,
+      label: getTimezoneLabel(iana),
+    }));
+  }
+  return _cachedFormattedList;
+}
+
+/**
+ * Keep TIMEZONE_LIST as a backward-compatible alias.
+ * @deprecated Use getFormattedTimezoneList() for DST-aware labels.
+ */
+export const TIMEZONE_LIST = getFormattedTimezoneList();
+
+/**
  * Map each country to its applicable timezone IANA values.
- * When a country is selected, only these timezones should appear.
  */
 export const countryTimezones: Record<string, string[]> = {
   // Africa
@@ -318,7 +354,8 @@ export const countryTimezones: Record<string, string[]> = {
   "Netherlands": ["Europe/Paris"], "North Macedonia": ["Europe/Paris"],
   "Norway": ["Europe/Paris"], "Poland": ["Europe/Paris"],
   "Portugal": ["Europe/London", "Atlantic/Azores"],
-  "Romania": ["Europe/Helsinki"], "Russia": ["Europe/Moscow", "Asia/Dubai", "Asia/Tashkent", "Asia/Almaty", "Asia/Bangkok", "Asia/Shanghai", "Asia/Tokyo"],
+  "Romania": ["Europe/Helsinki"],
+  "Russia": ["Europe/Moscow", "Asia/Dubai", "Asia/Tashkent", "Asia/Almaty", "Asia/Bangkok", "Asia/Shanghai", "Asia/Tokyo"],
   "San Marino": ["Europe/Paris"], "Serbia": ["Europe/Paris"],
   "Slovakia": ["Europe/Paris"], "Slovenia": ["Europe/Paris"],
   "Spain": ["Europe/Paris"], "Sweden": ["Europe/Paris"],
@@ -369,13 +406,14 @@ export const countryTimezones: Record<string, string[]> = {
 };
 
 /**
- * Get filtered timezones for a given country.
+ * Get filtered timezones for a given country with dynamic labels.
  * If no country selected, returns full list.
  */
-export function getTimezonesForCountry(country: string): typeof TIMEZONE_LIST {
+export function getTimezonesForCountry(country: string): { value: string; label: string }[] {
   const tzValues = countryTimezones[country];
-  if (!tzValues || tzValues.length === 0) return TIMEZONE_LIST;
-  return TIMEZONE_LIST.filter(tz => tzValues.includes(tz.value));
+  const fullList = getFormattedTimezoneList();
+  if (!tzValues || tzValues.length === 0) return fullList;
+  return fullList.filter(tz => tzValues.includes(tz.value));
 }
 
 /**

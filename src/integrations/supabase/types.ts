@@ -257,6 +257,30 @@ export type Database = {
           },
         ]
       }
+      campaign_audience_personas: {
+        Row: {
+          created_at: string | null
+          created_by: string | null
+          criteria: Json
+          id: string
+          persona_name: string
+        }
+        Insert: {
+          created_at?: string | null
+          created_by?: string | null
+          criteria?: Json
+          id?: string
+          persona_name: string
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string | null
+          criteria?: Json
+          id?: string
+          persona_name?: string
+        }
+        Relationships: []
+      }
       campaign_communications: {
         Row: {
           account_id: string | null
@@ -266,16 +290,25 @@ export type Database = {
           communication_date: string | null
           communication_type: string
           contact_id: string | null
+          conversation_id: string | null
           created_at: string | null
           created_by: string | null
+          delivery_status: string | null
           email_status: string | null
           email_type: string | null
+          graph_message_id: string | null
           id: string
+          internet_message_id: string | null
           linkedin_status: string | null
+          message_id: string | null
           notes: string | null
           outcome: string | null
           owner: string | null
+          parent_id: string | null
+          sent_via: string | null
           subject: string | null
+          template_id: string | null
+          thread_id: string | null
         }
         Insert: {
           account_id?: string | null
@@ -285,16 +318,25 @@ export type Database = {
           communication_date?: string | null
           communication_type: string
           contact_id?: string | null
+          conversation_id?: string | null
           created_at?: string | null
           created_by?: string | null
+          delivery_status?: string | null
           email_status?: string | null
           email_type?: string | null
+          graph_message_id?: string | null
           id?: string
+          internet_message_id?: string | null
           linkedin_status?: string | null
+          message_id?: string | null
           notes?: string | null
           outcome?: string | null
           owner?: string | null
+          parent_id?: string | null
+          sent_via?: string | null
           subject?: string | null
+          template_id?: string | null
+          thread_id?: string | null
         }
         Update: {
           account_id?: string | null
@@ -304,16 +346,25 @@ export type Database = {
           communication_date?: string | null
           communication_type?: string
           contact_id?: string | null
+          conversation_id?: string | null
           created_at?: string | null
           created_by?: string | null
+          delivery_status?: string | null
           email_status?: string | null
           email_type?: string | null
+          graph_message_id?: string | null
           id?: string
+          internet_message_id?: string | null
           linkedin_status?: string | null
+          message_id?: string | null
           notes?: string | null
           outcome?: string | null
           owner?: string | null
+          parent_id?: string | null
+          sent_via?: string | null
           subject?: string | null
+          template_id?: string | null
+          thread_id?: string | null
         }
         Relationships: [
           {
@@ -335,6 +386,20 @@ export type Database = {
             columns: ["contact_id"]
             isOneToOne: false
             referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_communications_parent_id_fkey"
+            columns: ["parent_id"]
+            isOneToOne: false
+            referencedRelation: "campaign_communications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_communications_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "campaign_email_templates"
             referencedColumns: ["id"]
           },
         ]
@@ -587,6 +652,50 @@ export type Database = {
           updated_by?: string | null
         }
         Relationships: []
+      }
+      campaign_timing_windows: {
+        Row: {
+          campaign_id: string
+          created_at: string
+          created_by: string | null
+          end_date: string
+          id: string
+          notes: string | null
+          priority: string
+          start_date: string
+          window_name: string
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string
+          created_by?: string | null
+          end_date: string
+          id?: string
+          notes?: string | null
+          priority?: string
+          start_date: string
+          window_name: string
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string
+          created_by?: string | null
+          end_date?: string
+          id?: string
+          notes?: string | null
+          priority?: string
+          start_date?: string
+          window_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "campaign_timing_windows_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       campaigns: {
         Row: {
@@ -1072,6 +1181,7 @@ export type Database = {
           created_at: string | null
           delivered_at: string | null
           id: string
+          internet_message_id: string | null
           is_valid_open: boolean | null
           last_reply_at: string | null
           lead_id: string | null
@@ -1100,6 +1210,7 @@ export type Database = {
           created_at?: string | null
           delivered_at?: string | null
           id?: string
+          internet_message_id?: string | null
           is_valid_open?: boolean | null
           last_reply_at?: string | null
           lead_id?: string | null
@@ -1128,6 +1239,7 @@ export type Database = {
           created_at?: string | null
           delivered_at?: string | null
           id?: string
+          internet_message_id?: string | null
           is_valid_open?: boolean | null
           last_reply_at?: string | null
           lead_id?: string | null
@@ -1691,6 +1803,24 @@ export type Database = {
         Args: { _campaign_id: string }
         Returns: undefined
       }
+      get_campaign_aggregates: {
+        Args: never
+        Returns: {
+          accounts_count: number
+          call_count: number
+          campaign_id: string
+          communications_count: number
+          contacts_count: number
+          email_count: number
+          email_failed: number
+          email_replied: number
+          email_sent: number
+          linkedin_count: number
+          phone_count: number
+          replies_count: number
+        }[]
+      }
+      get_campaign_widget_stats: { Args: never; Returns: Json }
       get_user_role: { Args: { p_user_id: string }; Returns: string }
       is_current_user_admin: { Args: never; Returns: boolean }
       is_user_admin: { Args: { user_id?: string }; Returns: boolean }

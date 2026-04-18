@@ -40,7 +40,6 @@ export const ListView = ({
     regions: [],
     leadOwners: [],
     priorities: [],
-    probabilities: [],
     handoffStatuses: [],
     searchTerm: "",
     probabilityRange: [0, 100],
@@ -227,14 +226,12 @@ export const ListView = ({
     const regions = Array.from(new Set(deals.map(d => d.region).filter(Boolean)));
     const leadOwners = Array.from(new Set(deals.map(d => d.lead_owner).filter(Boolean)));
     const priorities = Array.from(new Set(deals.map(d => String(d.priority)).filter(p => p !== 'undefined')));
-    const probabilities = Array.from(new Set(deals.map(d => String(d.probability)).filter(p => p !== 'undefined')));
     const handoffStatuses = Array.from(new Set(deals.map(d => d.handoff_status).filter(Boolean)));
     
     return {
       regions,
       leadOwners,
       priorities,
-      probabilities,
       handoffStatuses,
     };
   }, [deals]);
@@ -273,7 +270,6 @@ export const ListView = ({
       const matchesRegions = filters.regions.length === 0 || filters.regions.includes(deal.region || '');
       const matchesLeadOwners = filters.leadOwners.length === 0 || filters.leadOwners.includes(deal.lead_owner || '');
       const matchesPriorities = filters.priorities.length === 0 || filters.priorities.includes(String(deal.priority || ''));
-      const matchesProbabilities = filters.probabilities.length === 0 || filters.probabilities.includes(String(deal.probability || ''));
       const matchesHandoffStatuses = filters.handoffStatuses.length === 0 || filters.handoffStatuses.includes(deal.handoff_status || '');
       
       // Probability range filter
@@ -281,7 +277,7 @@ export const ListView = ({
       const matchesProbabilityRange = dealProbability >= filters.probabilityRange[0] && dealProbability <= filters.probabilityRange[1];
       
       return matchesSearch && matchesStages && matchesRegions && matchesLeadOwners && 
-             matchesPriorities && matchesProbabilities && matchesHandoffStatuses && matchesProbabilityRange;
+             matchesPriorities && matchesHandoffStatuses && matchesProbabilityRange;
     })
     .sort((a, b) => {
       let aValue: any;
@@ -328,7 +324,6 @@ export const ListView = ({
     if (filters.regions.length > 0) count++;
     if (filters.leadOwners.length > 0) count++;
     if (filters.priorities.length > 0) count++;
-    if (filters.probabilities.length > 0) count++;
     if (filters.handoffStatuses.length > 0) count++;
     if (filters.searchTerm) count++;
     if (filters.probabilityRange[0] > 0 || filters.probabilityRange[1] < 100) count++;
@@ -341,7 +336,6 @@ export const ListView = ({
       regions: [],
       leadOwners: [],
       priorities: [],
-      probabilities: [],
       handoffStatuses: [],
       searchTerm: "",
       probabilityRange: [0, 100],
@@ -388,7 +382,6 @@ export const ListView = ({
             availableRegions={availableOptions.regions}
             availableLeadOwners={availableOptions.leadOwners}
             availablePriorities={availableOptions.priorities}
-            availableProbabilities={availableOptions.probabilities}
             availableHandoffStatuses={availableOptions.handoffStatuses}
           />
 

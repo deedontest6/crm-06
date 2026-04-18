@@ -14,7 +14,7 @@ import {
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useState } from "react";
-import { useNotifications } from "@/hooks/useNotifications";
+import { useUnreadNotificationCount } from "@/hooks/useUnreadNotificationCount";
 import {
   Tooltip,
   TooltipContent,
@@ -53,7 +53,7 @@ export function AppSidebar({ isFixed = false, isOpen, onToggle }: AppSidebarProp
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const currentPath = location.pathname;
-  const { unreadCount } = useNotifications();
+  const unreadCount = useUnreadNotificationCount();
 
   // Use external state if provided (for fixed mode), otherwise use internal state
   const sidebarOpen = isFixed ? (isOpen ?? false) : isPinned;

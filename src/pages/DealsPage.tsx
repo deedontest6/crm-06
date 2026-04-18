@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { fetchAllRecords } from "@/utils/supabasePagination";
 import { useAuth } from "@/hooks/useAuth";
 import { Deal, DealStage } from "@/types/deal";
 import { KanbanBoard } from "@/components/KanbanBoard";
@@ -17,6 +17,7 @@ const DealsPage = () => {
   const { user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { logCreate, logUpdate, logDelete, logBulkDelete } = useCRUDAudit();
   
   // URL params for highlight from notifications
@@ -24,30 +25,69 @@ const DealsPage = () => {
   const highlightId = searchParams.get('highlight');
   const [highlightProcessed, setHighlightProcessed] = useState(false);
   
-  const [deals, setDeals] = useState<Deal[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedDeal, setSelectedDeal] = useState<Deal | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [initialStage, setInitialStage] = useState<DealStage>('Lead');
   const [activeView, setActiveView] = useState<'kanban' | 'list'>('kanban');
 
-  const fetchDeals = async () => {
-    try {
-      setLoading(true);
-      const allDeals = await fetchAllRecords<Deal>('deals', 'modified_at', false);
-      setDeals(allDeals as unknown as Deal[]);
-    } catch (error) {
-      console.error('Error fetching deals:', error);
-      toast({
-        title: "Error",
-        description: "Failed to fetch deals",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Initial fetch is capped to KANBAN_LIMIT most-recent deals so first paint is fast.
+  // The "Load all" button below pulls the rest in 1000-row batches when needed
+  // (e.g. a user with thousands of historical deals scrolling further).
+  const KANBAN_LIMIT = 500;
+  const [loadAll, setLoadAll] = useState(false);
+
+  const dealsQuery = useQuery({
+    queryKey: ['deals-all', loadAll],
+    enabled: !!user,
+    staleTime: 2 * 60 * 1000,
+    queryFn: async (): Promise<Deal[]> => {
+      // Fast path: only the most recent KANBAN_LIMIT rows for initial paint
+      if (!loadAll) {
+        const { data, error } = await supabase
+          .from('deals')
+          .select('*')
+          .order('modified_at', { ascending: false })
+          .range(0, KANBAN_LIMIT - 1);
+        if (error) throw error;
+        return (data || []) as unknown as Deal[];
+      }
+
+      // Full load (paginated to bypass the 1000-row supabase limit)
+      const PAGE = 1000;
+      let from = 0;
+      const all: Deal[] = [];
+      while (true) {
+        const { data, error } = await supabase
+          .from('deals')
+          .select('*')
+          .order('modified_at', { ascending: false })
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        const batch = (data || []) as unknown as Deal[];
+        all.push(...batch);
+        if (batch.length < PAGE) break;
+        from += PAGE;
+      }
+      return all;
+    },
+  });
+
+  const deals = dealsQuery.data || [];
+  const loading = dealsQuery.isLoading;
+  const hasMore = !loadAll && deals.length >= KANBAN_LIMIT;
+
+  const fetchDeals = useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: ['deals-all'] });
+  }, [queryClient]);
+
+  // Local helper to update deals cache without refetching
+  const setDeals = useCallback(
+    (updater: (prev: Deal[]) => Deal[]) => {
+      queryClient.setQueryData<Deal[]>(['deals-all', loadAll], (prev) => updater(prev || []));
+    },
+    [queryClient, loadAll]
+  );
 
   const handleUpdateDeal = async (dealId: string, updates: Partial<Deal>) => {
     try {
@@ -313,48 +353,67 @@ const DealsPage = () => {
 
   useEffect(() => {
     if (user) {
-      fetchDeals();
+      // useQuery already does the initial fetch — don't double-fetch on mount.
+      // Set up real-time subscription — only when tab is visible to avoid
+      // wasted re-renders when the user is on another tab.
+      let channel: ReturnType<typeof supabase.channel> | null = null;
 
-      // Set up real-time subscription
-      const channel = supabase
-        .channel('deals-changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'deals'
-          },
-          (payload) => {
-            console.log('Real-time deal change:', payload);
-            
-            if (payload.eventType === 'INSERT') {
-              setDeals(prev => [payload.new as Deal, ...prev]);
-            } else if (payload.eventType === 'UPDATE') {
-              setDeals(prev => prev.map(deal => 
-                deal.id === payload.new.id ? { ...deal, ...payload.new } as Deal : deal
-              ));
-            } else if (payload.eventType === 'DELETE') {
-              setDeals(prev => prev.filter(deal => deal.id !== payload.old.id));
+      const subscribe = () => {
+        if (channel) return;
+        channel = supabase
+          .channel('deals-changes')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'deals' },
+            (payload) => {
+              if (payload.eventType === 'INSERT') {
+                setDeals(prev => [payload.new as Deal, ...prev]);
+              } else if (payload.eventType === 'UPDATE') {
+                setDeals(prev => prev.map(deal =>
+                  deal.id === payload.new.id ? { ...deal, ...payload.new } as Deal : deal
+                ));
+              } else if (payload.eventType === 'DELETE') {
+                setDeals(prev => prev.filter(deal => deal.id !== payload.old.id));
+              }
             }
-          }
-        )
-        .subscribe();
+          )
+          .subscribe();
+      };
+
+      const unsubscribe = () => {
+        if (channel) {
+          supabase.removeChannel(channel);
+          channel = null;
+        }
+      };
+
+      const onVisibility = () => {
+        if (document.visibilityState === 'visible') {
+          subscribe();
+          fetchDeals();
+        } else {
+          unsubscribe();
+        }
+      };
+
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        subscribe();
+      }
+      document.addEventListener('visibilitychange', onVisibility);
 
       // Listen for custom import events
       const handleImportEvent = () => {
-        console.log('DealsPage: Received deals-data-updated event, refreshing...');
         fetchDeals();
       };
-      
       window.addEventListener('deals-data-updated', handleImportEvent);
 
       return () => {
-        supabase.removeChannel(channel);
+        unsubscribe();
+        document.removeEventListener('visibilitychange', onVisibility);
         window.removeEventListener('deals-data-updated', handleImportEvent);
       };
     }
-  }, [user]);
+  }, [user, fetchDeals, setDeals]);
 
   if (authLoading || loading) {
     return (
@@ -373,29 +432,35 @@ const DealsPage = () => {
 
   const headerActions = (
     <div className="flex items-center gap-2">
-      <ToggleGroup 
-        type="single" 
-        value={activeView} 
+      <ToggleGroup
+        type="single"
+        value={activeView}
         onValueChange={(value) => value && setActiveView(value as 'kanban' | 'list')}
         className="border rounded-lg p-0.5 bg-muted/50"
       >
-        <ToggleGroupItem 
-          value="kanban" 
-          aria-label="Kanban view" 
+        <ToggleGroupItem
+          value="kanban"
+          aria-label="Kanban view"
           className="px-3 h-8 text-sm data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:shadow-sm rounded-md"
         >
           <LayoutGrid className="h-4 w-4 mr-1" />
           Kanban
         </ToggleGroupItem>
-        <ToggleGroupItem 
-          value="list" 
-          aria-label="List view" 
+        <ToggleGroupItem
+          value="list"
+          aria-label="List view"
           className="px-3 h-8 text-sm data-[state=on]:bg-primary data-[state=on]:text-primary-foreground data-[state=on]:shadow-sm rounded-md"
         >
           <List className="h-4 w-4 mr-1" />
           List
         </ToggleGroupItem>
       </ToggleGroup>
+
+      {hasMore && activeView === 'kanban' && (
+        <Button variant="outline" size="sm" onClick={() => setLoadAll(true)}>
+          Load all deals
+        </Button>
+      )}
 
       <Button onClick={() => handleCreateDeal('Lead')}>
         <Plus className="w-4 h-4 mr-2" />

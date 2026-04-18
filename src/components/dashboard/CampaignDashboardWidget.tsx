@@ -3,68 +3,36 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Megaphone, Target, TrendingUp } from "lucide-react";
+import { Megaphone, TrendingUp } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+
+interface WidgetStats {
+  activeCount: number;
+  totalCount: number;
+  avgStrategy: number;
+  topCampaigns: { id: string; name: string; rate: number }[];
+}
 
 export function CampaignDashboardWidget() {
   const { user } = useAuth();
 
   const { data, isLoading } = useQuery({
     queryKey: ["campaign-dashboard-widget"],
-    queryFn: async () => {
-      // Fetch active campaigns
-      const { data: campaigns } = await supabase
-        .from("campaigns")
-        .select("id, campaign_name, status")
-        .is("archived_at", null);
-
-      const activeCampaigns = campaigns?.filter((c) => c.status === "Active") || [];
-      const allCampaigns = campaigns || [];
-
-      // Fetch MART data
-      const { data: martData } = await supabase.from("campaign_mart").select("*");
-
-      // Compute avg MART completion
-      let totalFlags = 0;
-      let doneFlags = 0;
-      const campaignIds = allCampaigns.map((c) => c.id);
-      martData?.forEach((m) => {
-        if (campaignIds.includes(m.campaign_id)) {
-          totalFlags += 4;
-          doneFlags += [m.message_done, m.audience_done, m.region_done, m.timing_done].filter(Boolean).length;
-        }
-      });
-      const avgMart = totalFlags > 0 ? Math.round((doneFlags / totalFlags) * 100) : 0;
-
-      // Fetch contacts for response rate
-      const { data: contacts } = await supabase
-        .from("campaign_contacts")
-        .select("campaign_id, stage");
-
-      const campaignResponseRates: { id: string; name: string; rate: number }[] = [];
-      allCampaigns.forEach((c) => {
-        const cContacts = contacts?.filter((cc) => cc.campaign_id === c.id) || [];
-        if (cContacts.length === 0) return;
-        const responded = cContacts.filter(
-          (cc) => cc.stage === "Responded" || cc.stage === "Qualified" || cc.stage === "Converted"
-        ).length;
-        campaignResponseRates.push({
-          id: c.id,
-          name: c.campaign_name,
-          rate: Math.round((responded / cContacts.length) * 100),
-        });
-      });
-
-      campaignResponseRates.sort((a, b) => b.rate - a.rate);
-
+    staleTime: 2 * 60 * 1000,
+    enabled: !!user,
+    queryFn: async (): Promise<WidgetStats> => {
+      const { data, error } = await supabase.rpc("get_campaign_widget_stats");
+      if (error) throw error;
+      const stats = (data as unknown as WidgetStats) || {
+        activeCount: 0, totalCount: 0, avgStrategy: 0, topCampaigns: [],
+      };
       return {
-        activeCount: activeCampaigns.length,
-        totalCount: allCampaigns.length,
-        avgMart,
-        topCampaigns: campaignResponseRates.slice(0, 3),
+        activeCount: stats.activeCount || 0,
+        totalCount: stats.totalCount || 0,
+        avgStrategy: stats.avgStrategy || 0,
+        topCampaigns: stats.topCampaigns || [],
       };
     },
-    enabled: !!user,
   });
 
   if (isLoading) {
@@ -98,8 +66,8 @@ export function CampaignDashboardWidget() {
             <div className="text-xs text-muted-foreground">Active Campaigns</div>
           </div>
           <div className="text-center p-3 rounded-lg bg-primary/5">
-            <div className="text-2xl font-bold text-primary">{data.avgMart}%</div>
-            <div className="text-xs text-muted-foreground">Avg MART Done</div>
+            <div className="text-2xl font-bold text-primary">{data.avgStrategy}%</div>
+            <div className="text-xs text-muted-foreground">Avg Strategy Done</div>
           </div>
           <div className="text-center p-3 rounded-lg bg-primary/5">
             <div className="text-2xl font-bold text-primary">{data.totalCount}</div>

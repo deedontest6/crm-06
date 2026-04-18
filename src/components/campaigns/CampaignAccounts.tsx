@@ -232,19 +232,19 @@ export function CampaignAccounts({ campaignId, isCampaignEnded }: Props) {
 
       {/* Add Accounts Modal */}
       <Dialog open={addModalOpen} onOpenChange={setAddModalOpen}>
-        <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[600px] max-h-[80vh] flex flex-col overflow-hidden">
           <DialogHeader><DialogTitle>Add Accounts to Campaign</DialogTitle></DialogHeader>
-          <div className="relative mb-4">
+          <div className="relative mb-4 flex-shrink-0">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input placeholder="Search accounts..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-9" />
           </div>
           {availableAccounts.length > 0 && (
-            <div className="flex items-center gap-3 p-2 border-b border-border mb-1 cursor-pointer" onClick={handleSelectAll}>
+            <div className="flex items-center gap-3 p-2 border-b border-border mb-1 cursor-pointer flex-shrink-0" onClick={handleSelectAll}>
               <Checkbox checked={selectedAccountIds.length === availableAccounts.length && availableAccounts.length > 0} />
               <span className="text-sm font-medium">Select All ({availableAccounts.length})</span>
             </div>
           )}
-          <div className="max-h-[400px] overflow-y-auto space-y-1">
+          <div className="flex-1 overflow-y-auto space-y-1 min-h-0">
             {availableAccounts.map((account) => (
               <div key={account.id} className="flex items-center gap-3 p-2 rounded hover:bg-muted/50 cursor-pointer" onClick={() => toggleSelect(account.id)}>
                 <Checkbox checked={selectedAccountIds.includes(account.id)} />

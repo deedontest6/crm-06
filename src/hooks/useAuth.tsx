@@ -83,9 +83,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
         if (!mounted) return;
-        
-        console.log('Auth state change:', event, session?.user?.email);
-        
+
         // Safari-compatible session handling
         if (session) {
           setSession(session);
@@ -110,18 +108,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           }
         }
         
-        if (event === 'TOKEN_REFRESHED' && session) {
-          // Update user data when token is refreshed (role changes, etc.)
-          setSession(session);
-          setUser(session.user);
-        }
-        
         setLoading(false);
         sessionFetched = true;
       }
     );
 
-    // Only get initial session if not already handled by auth state change
+    // Get initial session immediately (no artificial delay)
     const getInitialSession = async () => {
       if (!mounted || sessionFetched) return;
       
@@ -152,12 +144,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       }
     };
 
-    // Small delay to allow auth state change to handle session first
-    const timeoutId = setTimeout(getInitialSession, 100);
+    getInitialSession();
 
     return () => {
       mounted = false;
-      clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
   }, []); // Empty dependency array to prevent re-running

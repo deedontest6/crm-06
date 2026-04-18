@@ -34,7 +34,7 @@ const statusColors: Record<string, string> = {
 
 export default function Campaigns() {
   const navigate = useNavigate();
-  const { campaigns, archivedCampaigns, isLoading, archiveCampaign, restoreCampaign, cloneCampaign, getMartProgress } = useCampaigns();
+  const { campaigns, archivedCampaigns, isLoading, archiveCampaign, restoreCampaign, cloneCampaign, getStrategyProgress } = useCampaigns();
   const [view, setView] = useState<string>("dashboard");
   const [archiveView, setArchiveView] = useState<"active" | "archived">("active");
   const displayedCampaigns = archiveView === "active" ? campaigns : archivedCampaigns;
@@ -61,8 +61,8 @@ export default function Campaigns() {
     }
   };
 
-  const getMartBadge = (campaignId: string) => {
-    const { count, total } = getMartProgress(campaignId);
+  const getStrategyBadge = (campaignId: string) => {
+    const { count, total } = getStrategyProgress(campaignId);
     let colorClass = "bg-muted text-muted-foreground";
     if (count === total) colorClass = "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400";
     else if (count > 0) colorClass = "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400";
@@ -142,7 +142,7 @@ export default function Campaigns() {
 
       {/* Content */}
       {view === "dashboard" ? (
-        <CampaignDashboard campaigns={campaigns} getMartProgress={getMartProgress} />
+        <CampaignDashboard campaigns={campaigns} getStrategyProgress={getStrategyProgress} />
       ) : (
         <div className="flex-1 overflow-auto">
           {isLoading ? (
@@ -168,7 +168,7 @@ export default function Campaigns() {
                   <TableHead>Start Date</TableHead>
                   <TableHead>End Date</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>MART</TableHead>
+                  <TableHead>Strategy</TableHead>
                   <TableHead className="w-[150px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -195,7 +195,7 @@ export default function Campaigns() {
                     <TableCell>
                       <Badge className={statusColors[campaign.status || "Draft"]} variant="secondary">{campaign.status}</Badge>
                     </TableCell>
-                    <TableCell>{getMartBadge(campaign.id)}</TableCell>
+                    <TableCell>{getStrategyBadge(campaign.id)}</TableCell>
                     <TableCell>
                       <TooltipProvider delayDuration={300}>
                         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -219,7 +219,7 @@ export default function Campaigns() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8"
-                                  onClick={() => cloneCampaign.mutateAsync(campaign.id).then((newId) => { if (newId) navigate(`/campaigns/${newId}`); })}
+                                  onClick={() => cloneCampaign.mutateAsync(campaign.id).then((newId) => { if (newId) { const slug = (campaign.campaign_name + " (Copy)").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); navigate(`/campaigns/${slug}`); } })}
                                 >
                                   <Copy className="h-4 w-4 text-muted-foreground" />
                                 </Button>
