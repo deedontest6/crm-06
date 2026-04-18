@@ -180,23 +180,21 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
             <Collapsible key={section.key} open={isOpen} onOpenChange={() => toggleSection(section.key)}>
               <CollapsibleTrigger asChild>
                 <div className={`py-2 px-3 cursor-pointer transition-colors ${sectionStyles[section.key].header} ${sectionStyles[section.key].border}`}>
-                  <div className="grid grid-cols-[1fr_1fr_auto] items-center gap-2">
-                    <div className="flex items-center justify-center gap-2 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       {section.done
                         ? <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
                         : <Circle className="h-4 w-4 text-muted-foreground shrink-0" />}
                       <span className={sectionStyles[section.key].icon}>{sectionIcons[section.key]}</span>
                       <span className="text-sm font-semibold">{section.label}</span>
-                    </div>
-                    <div className="flex items-center justify-center min-w-0">
                       {!isOpen && (() => {
                         const summary = getContentSummary(section.key);
                         return summary ? (
-                          <span className="text-xs text-muted-foreground truncate">{summary}</span>
+                          <span className="text-xs text-muted-foreground ml-1 truncate">· {summary}</span>
                         ) : null;
                       })()}
                     </div>
-                    <div className="flex items-center gap-1 shrink-0 justify-self-end" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                       {section.done ? (
                         <Button variant="ghost" size="sm" className="text-[11px] h-6 px-2" onClick={() => handleUnmark(section.flag, section.label)}>Unmark</Button>
                       ) : (
