@@ -200,13 +200,8 @@ export function CampaignModal({ open, onClose, campaign, isStrategyComplete = fa
           {isEditing && (
             <div className="space-y-1">
               <Label className="text-xs font-medium">Status</Label>
-              <Select value={formData.status} onValueChange={(v) => setFormData({ ...formData, status: v })}>
-                <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {getAvailableStatuses().map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              {errors.status && <p className="text-xs text-destructive">{errors.status}</p>}
+              <Input className="h-9 bg-muted/50" value={formData.status} disabled readOnly />
+              <p className="text-xs text-muted-foreground">Change status from the campaign header to ensure proper transitions.</p>
             </div>
           )}
 
