@@ -113,14 +113,21 @@ export default function Campaigns() {
             </SelectContent>
           </Select>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-[160px] h-9"><SelectValue placeholder="Type" /></SelectTrigger>
+            <SelectTrigger className="w-[180px] h-9"><SelectValue placeholder="Type" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="Cold Outreach">Cold Outreach</SelectItem>
-              <SelectItem value="Nurture">Nurture</SelectItem>
-              <SelectItem value="Re-engagement">Re-engagement</SelectItem>
-              <SelectItem value="Event">Event</SelectItem>
-              <SelectItem value="Product Launch">Product Launch</SelectItem>
+              {CAMPAIGN_TYPE_OPTIONS.map((t) => (
+                <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+            <SelectTrigger className="w-[140px] h-9"><SelectValue placeholder="Priority" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Priorities</SelectItem>
+              <SelectItem value="High">High</SelectItem>
+              <SelectItem value="Medium">Medium</SelectItem>
+              <SelectItem value="Low">Low</SelectItem>
             </SelectContent>
           </Select>
           <div className="flex items-center gap-1 ml-auto">
