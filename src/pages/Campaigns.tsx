@@ -44,15 +44,17 @@ export default function Campaigns() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all");
   const [modalOpen, setModalOpen] = useState(false);
   const [editCampaign, setEditCampaign] = useState<any>(null);
   const [archiveId, setArchiveId] = useState<string | null>(null);
 
-  const filtered = displayedCampaigns.filter((c) => {
+  const filtered = displayedCampaigns.filter((c: any) => {
     const matchesSearch = c.campaign_name.toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === "all" || c.status === statusFilter;
-    const matchesType = typeFilter === "all" || c.campaign_type === typeFilter;
-    return matchesSearch && matchesStatus && matchesType;
+    const matchesType = typeFilter === "all" || campaignTypeLabel(c.campaign_type) === typeFilter;
+    const matchesPriority = priorityFilter === "all" || (c.priority || "Medium") === priorityFilter;
+    return matchesSearch && matchesStatus && matchesType && matchesPriority;
   });
 
   const handleArchive = () => {
