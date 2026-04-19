@@ -88,19 +88,24 @@ export default function CampaignDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [activateOpen, setActivateOpen] = useState(false);
+  const [completeOpen, setCompleteOpen] = useState(false);
   const autoCompleteRef = useRef(false);
 
-  // Auto-complete campaign when end date is reached (only if Active)
+  // Auto-complete campaign when end date is reached (Active or Paused)
   useEffect(() => {
     if (
       detail.campaign &&
       detail.isCampaignEnded &&
-      detail.campaign.status === "Active" &&
+      (detail.campaign.status === "Active" || detail.campaign.status === "Paused") &&
       !autoCompleteRef.current
     ) {
       autoCompleteRef.current = true;
       updateCampaign.mutate({ id: detail.campaign.id, status: "Completed" });
-      toast.info(`This campaign ended on ${detail.campaign.end_date} and has been marked Completed.`);
+      const endStr = detail.campaign.end_date
+        ? format(new Date(detail.campaign.end_date + "T00:00:00"), "dd-MM-yy")
+        : "";
+      toast.info(`This campaign ended on ${endStr} and has been marked Completed.`);
     }
   }, [detail.campaign, detail.isCampaignEnded]);
 
