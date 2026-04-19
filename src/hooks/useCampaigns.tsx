@@ -22,6 +22,9 @@ export interface CampaignFormData {
   target_audience?: string;
   message_strategy?: string;
   mart_complete?: boolean;
+  priority?: string;
+  primary_channel?: string;
+  tags?: string[];
 }
 
 export function useCampaigns() {
