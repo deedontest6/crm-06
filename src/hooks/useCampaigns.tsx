@@ -224,8 +224,11 @@ export function useCampaigns() {
           target_audience: source.target_audience,
           message_strategy: source.message_strategy,
           mart_complete: false,
+          priority: (source as any).priority || "Medium",
+          primary_channel: (source as any).primary_channel || null,
+          tags: (source as any).tags || null,
           created_by: user!.id,
-        });
+        } as any);
       if (insertErr) throw insertErr;
 
       // 3. Clone Strategy progress (reset all flags)
