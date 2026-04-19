@@ -174,6 +174,8 @@ export default function Campaigns() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
+                  <TableHead>Priority</TableHead>
+                  <TableHead>Channel</TableHead>
                   <TableHead>Owner</TableHead>
                   <TableHead>Start Date</TableHead>
                   <TableHead>End Date</TableHead>
@@ -183,7 +185,7 @@ export default function Campaigns() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((campaign) => (
+                {filtered.map((campaign: any) => (
                   <TableRow
                     key={campaign.id}
                     className={`cursor-pointer hover:bg-muted/50 ${campaign.archived_at ? "opacity-60" : ""}`}
@@ -197,8 +199,24 @@ export default function Campaigns() {
                       {campaign.archived_at && (
                         <Badge variant="outline" className="ml-2 text-xs">Archived</Badge>
                       )}
+                      {Array.isArray(campaign.tags) && campaign.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {campaign.tags.slice(0, 3).map((t: string) => (
+                            <Badge key={t} variant="outline" className="text-[10px] px-1.5 py-0">{t}</Badge>
+                          ))}
+                          {campaign.tags.length > 3 && (
+                            <span className="text-[10px] text-muted-foreground">+{campaign.tags.length - 3}</span>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
-                    <TableCell>{campaign.campaign_type}</TableCell>
+                    <TableCell>{campaignTypeLabel(campaign.campaign_type)}</TableCell>
+                    <TableCell>
+                      <Badge className={PRIORITY_BADGE_CLASS[campaign.priority || "Medium"]} variant="secondary">
+                        {campaign.priority || "Medium"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{campaign.primary_channel || "—"}</TableCell>
                     <TableCell>{campaign.owner ? displayNames[campaign.owner] || "—" : "—"}</TableCell>
                     <TableCell>{campaign.start_date ? format(new Date(campaign.start_date + "T00:00:00"), "dd MMM yyyy") : "—"}</TableCell>
                     <TableCell>{campaign.end_date ? format(new Date(campaign.end_date + "T00:00:00"), "dd MMM yyyy") : "—"}</TableCell>
