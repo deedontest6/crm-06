@@ -430,6 +430,11 @@ export default function CampaignDetail() {
             <AlertDialogTitle>Archive Campaign</AlertDialogTitle>
             <AlertDialogDescription>
               This campaign will be moved to the archive. You can restore it later from the campaigns list.
+              {(currentStatus === "Active" || currentStatus === "Paused") && (
+                <span className="block mt-2 text-destructive font-medium">
+                  Warning: this campaign is currently {currentStatus}. Archiving will remove it from active monitoring.
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -442,6 +447,51 @@ export default function CampaignDetail() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog open={activateOpen} onOpenChange={setActivateOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{currentStatus === "Paused" ? "Resume Campaign?" : "Activate Campaign?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {currentStatus === "Paused"
+                ? "Resuming will continue outreach and monitoring for this campaign."
+                : "Activating will start outreach and begin monitoring. Make sure your Strategy and audience are ready."}
+              {isBeforeStart && campaign.start_date && (
+                <span className="block mt-2 text-yellow-700 dark:text-yellow-400 font-medium">
+                  Note: scheduled start date is {format(new Date(campaign.start_date + "T00:00:00"), "dd-MM-yy")}. Activate now anyway?
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { performStatusChange("Active"); setActivateOpen(false); }}>
+              {currentStatus === "Paused" ? "Resume" : "Activate"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={completeOpen} onOpenChange={setCompleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mark as Completed?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action is permanent. Once completed, the campaign cannot be reactivated, edited as Active, or paused. Outreach and monitoring will stop.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { performStatusChange("Completed"); setCompleteOpen(false); }}
+            >
+              Mark Completed
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+    </TooltipProvider>
   );
 }
