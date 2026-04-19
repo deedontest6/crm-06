@@ -81,8 +81,11 @@ export function useCampaigns() {
           country: formData.country || null,
           target_audience: formData.target_audience || null,
           message_strategy: formData.message_strategy || null,
+          priority: formData.priority || "Medium",
+          primary_channel: formData.primary_channel || null,
+          tags: formData.tags && formData.tags.length > 0 ? formData.tags : null,
           created_by: user!.id,
-        });
+        } as any);
       if (error) throw error;
 
       // Auto-create campaign_mart row (Strategy progress tracking)
