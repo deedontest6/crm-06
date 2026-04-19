@@ -716,9 +716,12 @@ export type Database = {
           modified_by: string | null
           notes: string | null
           owner: string | null
+          primary_channel: string | null
+          priority: string | null
           region: string | null
           start_date: string | null
           status: string | null
+          tags: string[] | null
           target_audience: string | null
         }
         Insert: {
@@ -739,9 +742,12 @@ export type Database = {
           modified_by?: string | null
           notes?: string | null
           owner?: string | null
+          primary_channel?: string | null
+          priority?: string | null
           region?: string | null
           start_date?: string | null
           status?: string | null
+          tags?: string[] | null
           target_audience?: string | null
         }
         Update: {
@@ -762,9 +768,12 @@ export type Database = {
           modified_by?: string | null
           notes?: string | null
           owner?: string | null
+          primary_channel?: string | null
+          priority?: string | null
           region?: string | null
           start_date?: string | null
           status?: string | null
+          tags?: string[] | null
           target_audience?: string | null
         }
         Relationships: []

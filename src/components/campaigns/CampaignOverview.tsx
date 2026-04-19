@@ -10,6 +10,7 @@ import {
   Activity, Trophy, HeartPulse, Calendar, Layers
 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
+import { campaignTypeLabel, PRIORITY_BADGE_CLASS } from "@/utils/campaignTypeLabel";
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend, BarChart, Bar
@@ -647,7 +648,19 @@ export function CampaignOverview({
             <div className="space-y-4">
               <div>
                 <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-1">Type</p>
-                <p className="text-sm font-medium">{campaign.campaign_type || "—"}</p>
+                <p className="text-sm font-medium">{campaignTypeLabel(campaign.campaign_type)}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-1">Priority</p>
+                  <Badge className={`${PRIORITY_BADGE_CLASS[campaign.priority || "Medium"]} h-6 px-2.5 text-xs`} variant="secondary">
+                    {campaign.priority || "Medium"}
+                  </Badge>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-1">Channel</p>
+                  <p className="text-sm font-medium">{campaign.primary_channel || "—"}</p>
+                </div>
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-1">Status</p>
@@ -655,6 +668,16 @@ export function CampaignOverview({
                   {campaign.status || "Draft"}
                 </Badge>
               </div>
+              {Array.isArray(campaign.tags) && campaign.tags.length > 0 && (
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-1">Tags</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {campaign.tags.map((t: string) => (
+                      <Badge key={t} variant="outline" className="h-6 px-2.5 text-xs bg-muted/40">{t}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
               {countries.length > 0 && (
                 <div>
                   <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium mb-1">Region</p>

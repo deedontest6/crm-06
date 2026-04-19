@@ -22,6 +22,9 @@ export interface CampaignFormData {
   target_audience?: string;
   message_strategy?: string;
   mart_complete?: boolean;
+  priority?: string;
+  primary_channel?: string;
+  tags?: string[];
 }
 
 export function useCampaigns() {
@@ -78,8 +81,11 @@ export function useCampaigns() {
           country: formData.country || null,
           target_audience: formData.target_audience || null,
           message_strategy: formData.message_strategy || null,
+          priority: formData.priority || "Medium",
+          primary_channel: formData.primary_channel || null,
+          tags: formData.tags && formData.tags.length > 0 ? formData.tags : null,
           created_by: user!.id,
-        });
+        } as any);
       if (error) throw error;
 
       // Auto-create campaign_mart row (Strategy progress tracking)
@@ -218,8 +224,11 @@ export function useCampaigns() {
           target_audience: source.target_audience,
           message_strategy: source.message_strategy,
           mart_complete: false,
+          priority: (source as any).priority || "Medium",
+          primary_channel: (source as any).primary_channel || null,
+          tags: (source as any).tags || null,
           created_by: user!.id,
-        });
+        } as any);
       if (insertErr) throw insertErr;
 
       // 3. Clone Strategy progress (reset all flags)

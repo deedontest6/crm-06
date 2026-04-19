@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import { CampaignModal } from "@/components/campaigns/CampaignModal";
 import { CampaignDashboard } from "@/components/campaigns/CampaignDashboard";
 import { format } from "date-fns";
+import { CAMPAIGN_TYPE_OPTIONS, campaignTypeLabel, PRIORITY_BADGE_CLASS } from "@/utils/campaignTypeLabel";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,15 +44,17 @@ export default function Campaigns() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all");
   const [modalOpen, setModalOpen] = useState(false);
   const [editCampaign, setEditCampaign] = useState<any>(null);
   const [archiveId, setArchiveId] = useState<string | null>(null);
 
-  const filtered = displayedCampaigns.filter((c) => {
+  const filtered = displayedCampaigns.filter((c: any) => {
     const matchesSearch = c.campaign_name.toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === "all" || c.status === statusFilter;
-    const matchesType = typeFilter === "all" || c.campaign_type === typeFilter;
-    return matchesSearch && matchesStatus && matchesType;
+    const matchesType = typeFilter === "all" || campaignTypeLabel(c.campaign_type) === typeFilter;
+    const matchesPriority = priorityFilter === "all" || (c.priority || "Medium") === priorityFilter;
+    return matchesSearch && matchesStatus && matchesType && matchesPriority;
   });
 
   const handleArchive = () => {
@@ -110,14 +113,21 @@ export default function Campaigns() {
             </SelectContent>
           </Select>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-[160px] h-9"><SelectValue placeholder="Type" /></SelectTrigger>
+            <SelectTrigger className="w-[180px] h-9"><SelectValue placeholder="Type" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="Cold Outreach">Cold Outreach</SelectItem>
-              <SelectItem value="Nurture">Nurture</SelectItem>
-              <SelectItem value="Re-engagement">Re-engagement</SelectItem>
-              <SelectItem value="Event">Event</SelectItem>
-              <SelectItem value="Product Launch">Product Launch</SelectItem>
+              {CAMPAIGN_TYPE_OPTIONS.map((t) => (
+                <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={priorityFilter} onValueChange={setPriorityFilter}>
+            <SelectTrigger className="w-[140px] h-9"><SelectValue placeholder="Priority" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Priorities</SelectItem>
+              <SelectItem value="High">High</SelectItem>
+              <SelectItem value="Medium">Medium</SelectItem>
+              <SelectItem value="Low">Low</SelectItem>
             </SelectContent>
           </Select>
           <div className="flex items-center gap-1 ml-auto">
@@ -164,6 +174,8 @@ export default function Campaigns() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Type</TableHead>
+                  <TableHead>Priority</TableHead>
+                  <TableHead>Channel</TableHead>
                   <TableHead>Owner</TableHead>
                   <TableHead>Start Date</TableHead>
                   <TableHead>End Date</TableHead>
@@ -173,7 +185,7 @@ export default function Campaigns() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((campaign) => (
+                {filtered.map((campaign: any) => (
                   <TableRow
                     key={campaign.id}
                     className={`cursor-pointer hover:bg-muted/50 ${campaign.archived_at ? "opacity-60" : ""}`}
@@ -187,8 +199,24 @@ export default function Campaigns() {
                       {campaign.archived_at && (
                         <Badge variant="outline" className="ml-2 text-xs">Archived</Badge>
                       )}
+                      {Array.isArray(campaign.tags) && campaign.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {campaign.tags.slice(0, 3).map((t: string) => (
+                            <Badge key={t} variant="outline" className="text-[10px] px-1.5 py-0">{t}</Badge>
+                          ))}
+                          {campaign.tags.length > 3 && (
+                            <span className="text-[10px] text-muted-foreground">+{campaign.tags.length - 3}</span>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
-                    <TableCell>{campaign.campaign_type}</TableCell>
+                    <TableCell>{campaignTypeLabel(campaign.campaign_type)}</TableCell>
+                    <TableCell>
+                      <Badge className={PRIORITY_BADGE_CLASS[campaign.priority || "Medium"]} variant="secondary">
+                        {campaign.priority || "Medium"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{campaign.primary_channel || "—"}</TableCell>
                     <TableCell>{campaign.owner ? displayNames[campaign.owner] || "—" : "—"}</TableCell>
                     <TableCell>{campaign.start_date ? format(new Date(campaign.start_date + "T00:00:00"), "dd MMM yyyy") : "—"}</TableCell>
                     <TableCell>{campaign.end_date ? format(new Date(campaign.end_date + "T00:00:00"), "dd MMM yyyy") : "—"}</TableCell>
