@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import { CampaignModal } from "@/components/campaigns/CampaignModal";
 import { CampaignDashboard } from "@/components/campaigns/CampaignDashboard";
 import { format } from "date-fns";
+import { CAMPAIGN_TYPE_OPTIONS, campaignTypeLabel, PRIORITY_BADGE_CLASS } from "@/utils/campaignTypeLabel";
 import {
   AlertDialog,
   AlertDialogAction,
