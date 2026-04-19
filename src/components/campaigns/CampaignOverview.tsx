@@ -10,6 +10,7 @@ import {
   Activity, Trophy, HeartPulse, Calendar, Layers
 } from "lucide-react";
 import { format, differenceInDays } from "date-fns";
+import { campaignTypeLabel, PRIORITY_BADGE_CLASS } from "@/utils/campaignTypeLabel";
 import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend, BarChart, Bar
