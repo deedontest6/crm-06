@@ -151,95 +151,176 @@ export default function CampaignDetail() {
 
   const { campaign, isStrategyComplete, strategyProgress, isFullyStrategyComplete, isCampaignEnded, daysRemaining } = detail;
 
-  // Status transition rules
-  const handleStatusChange = (newStatus: string) => {
-    const current = campaign.status || "Draft";
+  const currentStatus = campaign.status || "Draft";
+  const isCompleted = currentStatus === "Completed";
+  const isDraftEndedPast = currentStatus === "Draft" && isCampaignEnded;
+  const todayStr = format(new Date(), "yyyy-MM-dd");
+  const isBeforeStart = !!campaign.start_date && todayStr < campaign.start_date;
 
-    // Completed lock
-    if (current === "Completed") {
-      toast.error("Completed campaigns cannot be reactivated.");
-      return;
+  type MenuOpt = { value: string; label: string; disabled: boolean; reason?: string };
+  const buildMenuOptions = (): MenuOpt[] => {
+    if (isCompleted) return [];
+    const opts: MenuOpt[] = [];
+
+    if (currentStatus !== "Draft") {
+      const canRevert = currentStatus === "Paused";
+      opts.push({
+        value: "Draft",
+        label: "Revert to Draft",
+        disabled: !canRevert,
+        reason: canRevert ? undefined : "Only Paused campaigns can revert to Draft",
+      });
     }
 
-    // Strategy gate for Active
-    if (newStatus === "Active" && !isFullyStrategyComplete) {
-      toast.error("Complete all 4 Strategy sections before activating this campaign.");
-      return;
+    if (currentStatus !== "Active") {
+      const label = currentStatus === "Paused" ? "Resume" : "Activate";
+      opts.push({
+        value: "Active",
+        label,
+        disabled: !isFullyStrategyComplete,
+        reason: isFullyStrategyComplete ? undefined : "Complete all 4 Strategy sections first",
+      });
     }
 
+    if (currentStatus === "Active") {
+      opts.push({ value: "Paused", label: "Pause", disabled: false });
+    }
+
+    opts.push({
+      value: "Completed",
+      label: "Mark Completed",
+      disabled: currentStatus === "Draft",
+      reason: currentStatus === "Draft" ? "Activate the campaign before completing it" : undefined,
+    });
+
+    return opts;
+  };
+
+  const performStatusChange = (newStatus: string) => {
     updateCampaign.mutate({ id: campaign.id, status: newStatus });
   };
 
-  const getAvailableStatuses = () => {
-    const current = campaign.status || "Draft";
-    if (current === "Completed") return [];
-    const statuses = ["Draft", "Paused", "Completed"];
-    if (isFullyStrategyComplete) statuses.splice(1, 0, "Active");
-    return statuses.filter((s) => s !== current);
+  const handleStatusChange = (newStatus: string) => {
+    if (isCompleted) {
+      toast.error("Completed campaigns cannot be reactivated.");
+      return;
+    }
+    if (newStatus === "Active") {
+      if (!isFullyStrategyComplete) {
+        toast.error("Complete all 4 Strategy sections before activating.");
+        return;
+      }
+      setActivateOpen(true);
+      return;
+    }
+    if (newStatus === "Completed") {
+      setCompleteOpen(true);
+      return;
+    }
+    performStatusChange(newStatus);
+  };
+
+  const statusDot: Record<string, string> = {
+    Draft: "bg-muted-foreground",
+    Active: "bg-primary",
+    Paused: "bg-yellow-500",
+    Completed: "bg-green-500",
   };
 
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex-shrink-0 h-16 px-6 border-b bg-background flex items-center justify-between">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-foreground truncate">{campaign.campaign_name}</h1>
-            <p className="text-sm text-muted-foreground truncate">
-              {campaign.campaign_type} · Owner: {campaign.owner ? displayNames[campaign.owner] || "—" : "—"}
-              {campaign.start_date && campaign.end_date && (
-                <> · {format(new Date(campaign.start_date + "T00:00:00"), "dd MMM yyyy")} → {format(new Date(campaign.end_date + "T00:00:00"), "dd MMM yyyy")}</>
+      <div className="flex-shrink-0 px-6 border-b bg-background">
+        <div className="h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="min-w-0">
+              <h1 className="text-xl font-semibold text-foreground truncate">{campaign.campaign_name}</h1>
+              <p className="text-sm text-muted-foreground truncate">
+                {campaign.campaign_type} · Owner: {campaign.owner ? displayNames[campaign.owner] || "—" : "—"}
+                {campaign.start_date && campaign.end_date && (
+                  <> · {format(new Date(campaign.start_date + "T00:00:00"), "dd-MM-yy")} → {format(new Date(campaign.end_date + "T00:00:00"), "dd-MM-yy")}</>
+                )}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild disabled={isCompleted}>
+                <Button size="sm" className={`gap-1.5 border ${statusColors[currentStatus]} hover:opacity-90`}>
+                  <span className={`inline-block h-2 w-2 rounded-full ${statusDot[currentStatus]}`} />
+                  {currentStatus}
+                  {!isCompleted && <ChevronDown className="h-3 w-3" />}
+                </Button>
+              </DropdownMenuTrigger>
+              {!isCompleted && (
+                <DropdownMenuContent align="end" className="w-56">
+                  {buildMenuOptions().map((opt) => {
+                    const item = (
+                      <DropdownMenuItem
+                        key={opt.value}
+                        disabled={opt.disabled}
+                        onSelect={(e) => {
+                          if (opt.disabled) { e.preventDefault(); return; }
+                          handleStatusChange(opt.value);
+                        }}
+                        className="flex items-center gap-2"
+                      >
+                        <span className={`inline-block h-2 w-2 rounded-full ${statusDot[opt.value]}`} />
+                        <span className="flex-1">{opt.label}</span>
+                      </DropdownMenuItem>
+                    );
+                    if (opt.disabled && opt.reason) {
+                      return (
+                        <Tooltip key={opt.value}>
+                          <TooltipTrigger asChild><div>{item}</div></TooltipTrigger>
+                          <TooltipContent side="left" className="max-w-[220px] text-xs">{opt.reason}</TooltipContent>
+                        </Tooltip>
+                      );
+                    }
+                    return item;
+                  })}
+                  {buildMenuOptions().length === 0 && (
+                    <DropdownMenuItem disabled>No status changes available</DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
               )}
-            </p>
+            </DropdownMenu>
+
+            {isCampaignEnded && !isCompleted && (
+              <Badge variant="destructive" className="flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> Ended
+              </Badge>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-1">
+                  <MoreHorizontal className="h-3.5 w-3.5" /> Actions
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem onClick={() => setEditOpen(true)}>
+                  <Pencil className="h-3.5 w-3.5 mr-2" /> Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => cloneCampaign.mutateAsync(campaign.id).then((newId) => { if (newId) { const slug = (campaign.campaign_name + " (Copy)").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); navigate(`/campaigns/${slug}`); } })}>
+                  <Copy className="h-3.5 w-3.5 mr-2" /> Clone
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setArchiveOpen(true)}>
+                  <Archive className="h-3.5 w-3.5 mr-2" /> Archive
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setDeleteOpen(true)} className="text-destructive focus:text-destructive">
+                  <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" className={`gap-1 border ${statusColors[campaign.status || "Draft"]} hover:opacity-90`}>
-                {campaign.status || "Draft"}
-                {campaign.status !== "Completed" && <ChevronDown className="h-3 w-3" />}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {getAvailableStatuses().map((s) => (
-                <DropdownMenuItem key={s} onClick={() => handleStatusChange(s)}>
-                  <Badge className={`${statusColors[s]}`} variant="secondary">{s}</Badge>
-                </DropdownMenuItem>
-              ))}
-              {getAvailableStatuses().length === 0 && (
-                <DropdownMenuItem disabled>No status changes available</DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {isCampaignEnded && (
-            <Badge variant="destructive" className="flex items-center gap-1">
-              <AlertTriangle className="h-3 w-3" /> Ended
-            </Badge>
-          )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-1">
-                <MoreHorizontal className="h-3.5 w-3.5" /> Actions
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuItem onClick={() => setEditOpen(true)}>
-                <Pencil className="h-3.5 w-3.5 mr-2" /> Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => cloneCampaign.mutateAsync(campaign.id).then((newId) => { if (newId) { const slug = (campaign.campaign_name + " (Copy)").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); navigate(`/campaigns/${slug}`); } })}>
-                <Copy className="h-3.5 w-3.5 mr-2" /> Clone
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setArchiveOpen(true)}>
-                <Archive className="h-3.5 w-3.5 mr-2" /> Archive
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setDeleteOpen(true)} className="text-destructive focus:text-destructive">
-                <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        {isDraftEndedPast && (
+          <div className="mb-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            End date has passed while still in Draft. Activate, reschedule, or mark complete.
+          </div>
+        )}
       </div>
 
       {/* 4 Tabs */}
