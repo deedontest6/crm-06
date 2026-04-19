@@ -198,8 +198,7 @@ export default function CampaignDetail() {
             <DropdownMenuContent align="end">
               {getAvailableStatuses().map((s) => (
                 <DropdownMenuItem key={s} onClick={() => handleStatusChange(s)}>
-                  <Badge className={`${statusColors[s]} mr-2`} variant="secondary">{s}</Badge>
-                  Set to {s}
+                  <Badge className={`${statusColors[s]}`} variant="secondary">{s}</Badge>
                 </DropdownMenuItem>
               ))}
               {getAvailableStatuses().length === 0 && (
