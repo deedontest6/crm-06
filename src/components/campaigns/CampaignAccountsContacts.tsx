@@ -463,7 +463,15 @@ export function CampaignAccountsContacts({ campaignId, isCampaignEnded, campaign
       });
       if (error) throw error;
       if (!data?.success) {
-        toast({ title: "Email send failed", description: data?.error || "Unknown error", variant: "destructive" }); return;
+        const isInactive = data?.errorCode === "CAMPAIGN_NOT_ACTIVE";
+        toast({
+          title: isInactive ? "Campaign not active" : "Email send failed",
+          description: isInactive
+            ? "This campaign is paused, completed or archived. Reactivate it before sending."
+            : (data?.error || "Unknown error"),
+          variant: "destructive",
+        });
+        return;
       }
       const currentRank = stageRanks[slideContact.stage || "Not Contacted"] ?? 0;
       if (1 > currentRank) {

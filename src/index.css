@@ -1,5 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap");
-@import url("https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;500;600;700&display=swap");
+/* Google Fonts loaded via <link> in index.html for non-blocking rendering */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

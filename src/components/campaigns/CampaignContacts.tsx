@@ -102,7 +102,10 @@ export function CampaignContacts({ campaignId, isCampaignEnded, campaignName, ca
   const { data: campaignContacts = [] } = useQuery({
     queryKey: ["campaign-contacts", campaignId],
     queryFn: async () => {
-      const { data, error } = await supabase.from("campaign_contacts").select("*, contacts(contact_name, email, position, company_name)").eq("campaign_id", campaignId);
+      const { data, error } = await supabase
+        .from("campaign_contacts")
+        .select("*, contacts(contact_name, email, position, company_name, linkedin, phone_no)")
+        .eq("campaign_id", campaignId);
       if (error) throw error;
       return data;
     },
@@ -301,7 +304,15 @@ export function CampaignContacts({ campaignId, isCampaignEnded, campaignName, ca
       });
       if (error) throw error;
       if (!data?.success) {
-        toast({ title: "Email send failed", description: data?.error || "Unknown error", variant: "destructive" }); return;
+        const isInactive = data?.errorCode === "CAMPAIGN_NOT_ACTIVE";
+        toast({
+          title: isInactive ? "Campaign not active" : "Email send failed",
+          description: isInactive
+            ? "This campaign is paused, completed or archived. Reactivate it before sending."
+            : (data?.error || "Unknown error"),
+          variant: "destructive",
+        });
+        return;
       }
       // Rank-based MAX stage
       const currentRank = stageRanks[slideContact.stage || "Not Contacted"] ?? 0;

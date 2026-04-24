@@ -2,12 +2,14 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Button } from "@/components/ui/button";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import SecurityEnhancedApp from "@/components/SecurityEnhancedApp";
 import { AppSidebar } from "@/components/AppSidebar";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 
 // Eager: most-common landing pages
 import Dashboard from "./pages/Dashboard";
@@ -23,6 +25,7 @@ const ActionItems = lazy(() => import("./pages/ActionItems"));
 const Settings = lazy(() => import("./pages/Settings"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const Notifications = lazy(() => import("./pages/Notifications"));
+const EmailSkipAuditLog = lazy(() => import("./pages/EmailSkipAuditLog"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,10 +39,49 @@ const queryClient = new QueryClient({
 });
 
 const RouteFallback = () => (
-  <div className="min-h-screen flex items-center justify-center bg-background">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+  <div className="min-h-screen flex items-center justify-center bg-background px-6">
+    <div className="flex flex-col items-center gap-3 text-center">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      <p className="text-sm font-medium text-foreground">Loading page</p>
+    </div>
   </div>
 );
+
+const RouteDiagnostics = () => {
+  const location = useLocation();
+
+  useEffect(() => {
+    console.info("[route] location changed", {
+      pathname: location.pathname,
+      search: location.search,
+      hash: location.hash,
+    });
+  }, [location]);
+
+  return null;
+};
+
+const AppCrashedFallback = ({ onRetry }: { onRetry: () => void }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background px-6">
+      <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-sm">
+        <div className="space-y-2 text-center">
+          <h1 className="text-xl font-semibold text-foreground">Something went wrong</h1>
+          <p className="text-sm text-muted-foreground">
+            The preview hit a runtime error on <span className="font-medium text-foreground">{location.pathname}</span>.
+          </p>
+        </div>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
+          <Button onClick={onRetry}>Retry preview</Button>
+          <Button variant="outline" onClick={() => navigate("/auth", { replace: true })}>Go to sign in</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // Layout Component for all pages with fixed sidebar
 const FixedSidebarLayout = ({ children }: { children: React.ReactNode }) => {
@@ -80,9 +122,10 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
+        <div className="text-center px-6">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
+          <p className="text-foreground font-medium">Restoring your workspace</p>
+          <p className="text-sm text-muted-foreground mt-1">Checking your session and loading the app shell.</p>
         </div>
       </div>
     );
@@ -106,9 +149,10 @@ const AuthRoute = ({ children }: { children: React.ReactNode }) => {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-center">
+        <div className="text-center px-6">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-muted-foreground">Loading...</p>
+          <p className="text-foreground font-medium">Preparing authentication</p>
+          <p className="text-sm text-muted-foreground mt-1">Please wait while we verify your session.</p>
         </div>
       </div>
     );
@@ -121,21 +165,33 @@ const AuthRoute = ({ children }: { children: React.ReactNode }) => {
   return <>{children}</>;
 };
 
+const RoutedApp = () => {
+  const location = useLocation();
+
+  return (
+    <AppErrorBoundary resetKeys={[location.pathname]} fallback={(reset) => <AppCrashedFallback onRetry={reset} />}>
+      <RouteDiagnostics />
+      <Routes>
+        <Route path="/auth" element={<AuthRoute><Auth /></AuthRoute>} />
+        <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
+        <Route path="/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
+        <Route path="/deals" element={<ProtectedRoute><DealsPage /></ProtectedRoute>} />
+        <Route path="/campaigns" element={<ProtectedRoute><Campaigns /></ProtectedRoute>} />
+        <Route path="/campaigns/:id" element={<ProtectedRoute><CampaignDetail /></ProtectedRoute>} />
+        <Route path="/action-items" element={<ProtectedRoute><ActionItems /></ProtectedRoute>} />
+        <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
+        <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+        <Route path="/settings/email-skip-audit" element={<ProtectedRoute><EmailSkipAuditLog /></ProtectedRoute>} />
+        <Route path="*" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
+      </Routes>
+    </AppErrorBoundary>
+  );
+};
+
 const AppRouter = () => (
   <BrowserRouter>
-    <Routes>
-      <Route path="/auth" element={<AuthRoute><Auth /></AuthRoute>} />
-      <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-      <Route path="/accounts" element={<ProtectedRoute><Accounts /></ProtectedRoute>} />
-      <Route path="/contacts" element={<ProtectedRoute><Contacts /></ProtectedRoute>} />
-      <Route path="/deals" element={<ProtectedRoute><DealsPage /></ProtectedRoute>} />
-      <Route path="/campaigns" element={<ProtectedRoute><Campaigns /></ProtectedRoute>} />
-      <Route path="/campaigns/:id" element={<ProtectedRoute><CampaignDetail /></ProtectedRoute>} />
-      <Route path="/action-items" element={<ProtectedRoute><ActionItems /></ProtectedRoute>} />
-      <Route path="/notifications" element={<ProtectedRoute><Notifications /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-      <Route path="*" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
-    </Routes>
+    <RoutedApp />
   </BrowserRouter>
 );
 

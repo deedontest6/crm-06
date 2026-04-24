@@ -203,7 +203,6 @@ export const AccountTableBody = ({
   };
 
   const getSortIcon = (field: string) => {
-    if (field === 'linked_contacts') return null;
     if (sortField !== field) return <ArrowUpDown className="ml-1 h-3 w-3 text-muted-foreground/60" />;
     return sortDirection === 'asc' 
       ? <ArrowUp className="ml-1 h-3 w-3 text-foreground" />
@@ -212,6 +211,15 @@ export const AccountTableBody = ({
 
   const allSelected = pageAccounts.length > 0 && selectedAccounts.length === pageAccounts.length;
   const someSelected = selectedAccounts.length > 0 && selectedAccounts.length < pageAccounts.length;
+
+  // Client-side sort for linked_contacts (count comes from a separate query)
+  const displayAccounts = sortField === 'linked_contacts'
+    ? [...pageAccounts].sort((a, b) => {
+        const ca = contactCounts[a.account_name] || 0;
+        const cb = contactCounts[b.account_name] || 0;
+        return sortDirection === 'asc' ? ca - cb : cb - ca;
+      })
+    : pageAccounts;
 
   return (
     <>
@@ -228,7 +236,7 @@ export const AccountTableBody = ({
                   key={column.field} 
                   className={cn(
                     "relative bg-muted/80 font-bold text-foreground py-3 px-4",
-                    sortField === column.field && column.field !== 'linked_contacts' && "bg-accent"
+                    sortField === column.field && "bg-accent"
                   )}
                   style={{ 
                     width: column.field === 'linked_contacts' ? '80px' : column.field === 'description' ? '30%' : `${columnWidths[column.field] || 120}px`,
@@ -236,7 +244,10 @@ export const AccountTableBody = ({
                   }}
                 >
                   {column.field === 'linked_contacts' ? (
-                    <span className="text-sm font-bold text-center block">{column.label}</span>
+                    <Button variant="ghost" size="sm" className="h-7 mx-auto flex text-sm font-bold hover:bg-transparent px-2" onClick={() => onSort(column.field)}>
+                      {column.label}
+                      {getSortIcon(column.field)}
+                    </Button>
                   ) : (
                     <Button variant="ghost" size="sm" className="h-7 -ml-2 text-sm font-bold hover:bg-transparent px-2" onClick={() => onSort(column.field)}>
                       {column.label}
@@ -269,7 +280,7 @@ export const AccountTableBody = ({
               </TableCell>
             </TableRow>
           ) : (
-            pageAccounts.map((account) => (
+            displayAccounts.map((account) => (
               <TableRow 
                 key={account.id} 
                 className={cn(

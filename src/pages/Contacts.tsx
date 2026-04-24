@@ -4,7 +4,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input";
 import { Settings, MoreVertical, Upload, Plus, Trash2, Download, Search } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useSimpleContactsImportExport } from "@/hooks/useSimpleContactsImportExport";
@@ -13,12 +14,38 @@ import { useCRUDAudit } from "@/hooks/useCRUDAudit";
 const Contacts = () => {
   const { toast } = useToast();
   const { logBulkDelete } = useCRUDAudit();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [showColumnCustomizer, setShowColumnCustomizer] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
+  const [initialEditContactId, setInitialEditContactId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Deep-link: when arriving with ?id=<contact_id>, search for that contact
+  // and auto-open the edit modal so links from Log Outreach land on the right row.
+  useEffect(() => {
+    const id = searchParams.get("id");
+    if (!id) return;
+    (async () => {
+      const { data } = await supabase
+        .from("contacts")
+        .select("contact_name")
+        .eq("id", id)
+        .maybeSingle();
+      if (data?.contact_name) {
+        setSearchTerm(data.contact_name);
+      }
+      // Trigger ContactTable to auto-open edit modal for this contact id.
+      setInitialEditContactId(id);
+      // Clear the param so reloads don't keep retriggering.
+      const next = new URLSearchParams(searchParams);
+      next.delete("id");
+      setSearchParams(next, { replace: true });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
@@ -148,6 +175,8 @@ const Contacts = () => {
           refreshTrigger={refreshTrigger}
           searchTerm={searchTerm}
           setSearchTerm={setSearchTerm}
+          initialEditContactId={initialEditContactId}
+          onInitialEditConsumed={() => setInitialEditContactId(null)}
         />
       </div>
     </div>

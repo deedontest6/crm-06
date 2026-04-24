@@ -32,12 +32,12 @@ import {
 } from "@/components/ui/alert-dialog";
 
 const menuItems = [
-  { title: "Dashboard", url: "/", icon: Home },
-  { title: "Accounts", url: "/accounts", icon: Building2 },
-  { title: "Contacts", url: "/contacts", icon: Users },
-  { title: "Deals", url: "/deals", icon: BarChart3 },
-  { title: "Campaigns", url: "/campaigns", icon: Megaphone },
-  { title: "Action Items", url: "/action-items", icon: CheckSquare },
+  { title: "Dashboard", url: "/", icon: Home, prefetch: () => import("@/pages/Dashboard") },
+  { title: "Accounts", url: "/accounts", icon: Building2, prefetch: () => import("@/pages/Accounts") },
+  { title: "Contacts", url: "/contacts", icon: Users, prefetch: () => import("@/pages/Contacts") },
+  { title: "Deals", url: "/deals", icon: BarChart3, prefetch: () => import("@/pages/DealsPage") },
+  { title: "Campaigns", url: "/campaigns", icon: Megaphone, prefetch: () => import("@/pages/Campaigns") },
+  { title: "Action Items", url: "/action-items", icon: CheckSquare, prefetch: () => import("@/pages/ActionItems") },
 ];
 
 interface AppSidebarProps {
@@ -133,6 +133,7 @@ export function AppSidebar({ isFixed = false, isOpen, onToggle }: AppSidebarProp
             const menuButton = (
               <NavLink
                 to={item.url}
+                onMouseEnter={() => { item.prefetch?.().catch(() => {}); }}
                 className={`
                   flex items-center h-10 rounded-lg relative transition-colors duration-200 font-medium
                   ${active 
@@ -189,6 +190,7 @@ export function AppSidebar({ isFixed = false, isOpen, onToggle }: AppSidebarProp
             <TooltipTrigger asChild>
               <button
                 onClick={handleNotificationClick}
+                onMouseEnter={() => { import("@/pages/Notifications").catch(() => {}); }}
                 className={`flex items-center h-10 w-full rounded-lg transition-colors font-medium ${
                   currentPath === '/notifications' 
                     ? 'text-sidebar-accent-foreground bg-sidebar-accent' 
@@ -228,6 +230,7 @@ export function AppSidebar({ isFixed = false, isOpen, onToggle }: AppSidebarProp
             <TooltipTrigger asChild>
               <button
                 onClick={() => navigate('/settings')}
+                onMouseEnter={() => { import("@/pages/Settings").catch(() => {}); }}
                 className={`flex items-center h-10 w-full rounded-lg transition-colors font-medium ${
                   currentPath === '/settings' || currentPath.startsWith('/settings')
                     ? 'text-sidebar-accent-foreground bg-sidebar-accent' 

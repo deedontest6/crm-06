@@ -1,7 +1,9 @@
 import { useState, lazy, Suspense, useEffect } from 'react';
-import { Users, Lock, History, Activity, BarChart3, Database } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Users, Lock, History, Activity, BarChart3, Database, ShieldAlert as ShieldAlertIcon, MailWarning } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { useUserRole } from '@/hooks/useUserRole';
 import { Loader2, ShieldAlert } from 'lucide-react';
 import SettingsCard from './shared/SettingsCard';
@@ -27,6 +29,7 @@ interface AdminSettingsPageProps {
 
 const AdminSettingsPage = ({ defaultSection }: AdminSettingsPageProps) => {
   const { userRole, loading: roleLoading } = useUserRole();
+  const navigate = useNavigate();
 
   const getTabFromSection = (section: string | null) => {
     if (!section) return 'users';
@@ -109,6 +112,20 @@ const AdminSettingsPage = ({ defaultSection }: AdminSettingsPageProps) => {
         </TabsContent>
 
         <TabsContent value="logs" className="mt-6 space-y-6">
+          <SettingsCard
+            icon={MailWarning}
+            title="Email Reply Skip Audit"
+            description="Every inbound reply rejected by the cross-thread safety guards, with the reason it was blocked."
+          >
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-muted-foreground">
+                Inspect skipped replies, deep-link from a manual re-sync, and download a PDF report.
+              </p>
+              <Button size="sm" variant="outline" onClick={() => navigate('/settings/email-skip-audit')}>
+                Open audit log
+              </Button>
+            </div>
+          </SettingsCard>
           <Suspense fallback={<SettingsLoadingSkeleton />}>
             <AuditLogsSettings />
           </Suspense>

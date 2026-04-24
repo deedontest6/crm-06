@@ -1,25 +1,30 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Search, ChevronRight, ChevronDown, Users, Mail, Phone, Linkedin } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
-import { expandRegionsForDb } from "@/utils/countryRegionMapping";
+import { expandRegionsForDb, normalizeCountryName } from "@/utils/countryRegionMapping";
+import { isReachableEmail, isReachableLinkedIn, isReachablePhone } from "@/lib/email";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   campaignId: string;
   selectedRegions?: string[];
+  selectedCountries?: string[];
   existingAccountIds: string[];
   existingContactIds: string[];
   campaignAccounts: any[];
+  /** B12: Default reachability chip filter, mirrors Audience channel filter. */
+  audienceChannelFilter?: "all" | "Email" | "LinkedIn" | "Phone";
 }
 
 async function fetchAllContacts() {
@@ -39,23 +44,81 @@ async function fetchAllContacts() {
   return allData;
 }
 
-export function AddAccountsModal({ open, onOpenChange, campaignId, selectedRegions = [], existingAccountIds, existingContactIds, campaignAccounts }: Props) {
+/**
+ * Fetch all accounts in batches with optional case-insensitive country/region filtering.
+ * - Bypasses Supabase's 1000-row default cap via .range() pagination.
+ * - Uses ilike for case-insensitive country matches (DB has both "India" and "india" variants).
+ * - If country filter is provided but yields zero, falls back to region filter so the modal
+ *   shows the same audience pool as the Region step's count.
+ */
+async function fetchAllAccounts(countryVariants: string[], regionVariants: string[]) {
+  const batchSize = 1000;
+
+  const runBatched = async (build: (q: any) => any) => {
+    const all: any[] = [];
+    let from = 0;
+    while (true) {
+      const q = build(supabase.from("accounts").select("id, account_name, industry, region, country"));
+      const { data, error } = await q.range(from, from + batchSize - 1);
+      if (error) throw error;
+      all.push(...(data || []));
+      if (!data || data.length < batchSize) break;
+      from += batchSize;
+    }
+    return all;
+  };
+
+  // Primary: case-insensitive country match
+  if (countryVariants.length > 0) {
+    const orExpr = countryVariants.map((c) => `country.ilike.${c.replace(/,/g, "")}`).join(",");
+    const byCountry = await runBatched((q) => q.or(orExpr));
+    if (byCountry.length > 0) return byCountry;
+  }
+
+  // Fallback: region filter (matches what Region step counts)
+  if (regionVariants.length > 0) {
+    return runBatched((q) => q.in("region", regionVariants));
+  }
+
+  // No filters
+  return runBatched((q) => q);
+}
+
+export function AddAccountsModal({ open, onOpenChange, campaignId, selectedRegions = [], selectedCountries = [], existingAccountIds, existingContactIds, campaignAccounts, audienceChannelFilter = "all" }: Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set());
+  // B12: default the contact reachability chip to the audience channel filter.
+  const [contactChannelChip, setContactChannelChip] = useState<"all" | "Email" | "LinkedIn" | "Phone">(audienceChannelFilter);
+  useEffect(() => { if (open) setContactChannelChip(audienceChannelFilter); }, [open, audienceChannelFilter]);
+
+  const matchesContactChannel = (c: any) => {
+    if (contactChannelChip === "all") return true;
+    if (contactChannelChip === "Email") return isReachableEmail(c?.email);
+    if (contactChannelChip === "LinkedIn") return isReachableLinkedIn(c?.linkedin);
+    return isReachablePhone(c?.phone_no);
+  };
+
+  // Build country variant list (canonical + raw) so we catch DB rows like "United States" or "us"
+  const countryVariants = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of selectedCountries) {
+      if (!c) continue;
+      set.add(c);
+      const canon = normalizeCountryName(c);
+      if (canon) set.add(canon);
+    }
+    return Array.from(set);
+  }, [selectedCountries]);
+
+  const regionVariants = useMemo(() => expandRegionsForDb(selectedRegions), [selectedRegions]);
 
   const { data: allAccounts = [] } = useQuery({
-    queryKey: ["all-accounts", selectedRegions.join(",")],
-    queryFn: async () => {
-      let q = supabase.from("accounts").select("id, account_name, industry, region, country");
-      if (selectedRegions.length > 0) q = q.in("region", expandRegionsForDb(selectedRegions));
-      const { data, error } = await q;
-      if (error) throw error;
-      return data;
-    },
+    queryKey: ["all-accounts-paginated", selectedRegions.join(","), countryVariants.join(",")],
+    queryFn: () => fetchAllAccounts(countryVariants, regionVariants),
     enabled: open,
   });
 
@@ -172,12 +235,18 @@ export function AddAccountsModal({ open, onOpenChange, campaignId, selectedRegio
               {selectedContactIds.length > 0 && `, ${selectedContactIds.length} contact${selectedContactIds.length !== 1 ? "s" : ""}`}
             </span>
           )}
+          <ToggleGroup type="single" value={contactChannelChip} onValueChange={(v) => setContactChannelChip((v as any) || "all")} size="sm" className="h-8">
+            <ToggleGroupItem value="all" className="h-7 px-2 text-[11px]">All</ToggleGroupItem>
+            <ToggleGroupItem value="Email" className="h-7 px-2 text-[11px]" aria-label="Email-reachable"><Mail className="h-3 w-3" /></ToggleGroupItem>
+            <ToggleGroupItem value="LinkedIn" className="h-7 px-2 text-[11px]" aria-label="LinkedIn-reachable"><Linkedin className="h-3 w-3" /></ToggleGroupItem>
+            <ToggleGroupItem value="Phone" className="h-7 px-2 text-[11px]" aria-label="Phone-reachable"><Phone className="h-3 w-3" /></ToggleGroupItem>
+          </ToggleGroup>
         </div>
         <div className="flex-1 overflow-y-auto min-h-0 border rounded-md divide-y divide-border">
           {availableAccounts.map((account) => {
             const accountContacts = contactsByAccountName[account.account_name.toLowerCase()] || [];
             const isExpanded = expandedAccounts.has(account.id);
-            const nonExisting = accountContacts.filter((c) => !existingContactIds.includes(c.id));
+            const nonExisting = accountContacts.filter((c) => !existingContactIds.includes(c.id) && matchesContactChannel(c));
             return (
               <div key={account.id}>
                 <div className="flex items-center gap-2 px-2.5 py-1.5 hover:bg-muted/50">
@@ -224,7 +293,20 @@ export function AddAccountsModal({ open, onOpenChange, campaignId, selectedRegio
               </div>
             );
           })}
-          {availableAccounts.length === 0 && <p className="text-sm text-muted-foreground text-center py-6">No available accounts</p>}
+          {availableAccounts.length === 0 && (
+            <div className="text-center py-6 space-y-1">
+              <p className="text-sm text-muted-foreground">
+                {allAccounts.length === 0
+                  ? "No accounts found in the selected regions/countries"
+                  : searchTerm
+                    ? `No accounts match "${searchTerm}"`
+                    : "All accounts in this region are already in the campaign"}
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                Loaded {allAccounts.length} account{allAccounts.length === 1 ? "" : "s"} from {selectedCountries.length > 0 ? `${selectedCountries.length} country/countries` : selectedRegions.length > 0 ? `${selectedRegions.length} region(s)` : "all regions"}.
+              </p>
+            </div>
+          )}
         </div>
         <div className="flex items-center justify-end gap-2 flex-shrink-0">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>

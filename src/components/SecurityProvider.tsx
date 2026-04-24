@@ -40,8 +40,8 @@ export const SecurityProvider = ({ children }: SecurityProviderProps) => {
       return;
     }
 
-    // Only log session start once per user session
-    const sessionKey = `${user.id}-${userRole}`;
+    // Only log session start once per user (not per role transition)
+    const sessionKey = user.id;
     if (sessionLoggedRef.current !== sessionKey) {
       sessionLoggedRef.current = sessionKey;
       logSecurityEvent('SESSION_START', 'auth', user.id, {

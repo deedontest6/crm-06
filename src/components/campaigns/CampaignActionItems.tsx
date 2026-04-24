@@ -55,11 +55,11 @@ export function CampaignActionItems({ campaignId }: Props) {
   });
 
   const { data: campaignContacts = [] } = useQuery({
-    queryKey: ["campaign-contacts", campaignId],
+    queryKey: ["campaign-contacts", campaignId, "action-items"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaign_contacts")
-        .select("contact_id, account_id, contacts(contact_name)")
+        .select("contact_id, account_id, contacts(contact_name, email, phone_no)")
         .eq("campaign_id", campaignId);
       if (error) throw error;
       return data;
@@ -67,7 +67,7 @@ export function CampaignActionItems({ campaignId }: Props) {
   });
 
   const { data: campaignAccounts = [] } = useQuery({
-    queryKey: ["campaign-accounts", campaignId],
+    queryKey: ["campaign-accounts", campaignId, "action-items"],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaign_accounts")
@@ -243,7 +243,14 @@ export function CampaignActionItems({ campaignId }: Props) {
                     <SelectTrigger className="h-8 text-sm"><SelectValue placeholder="Select contact" /></SelectTrigger>
                     <SelectContent>
                       {campaignContacts.map((cc: any) => (
-                        <SelectItem key={cc.contact_id} value={cc.contact_id}>{cc.contacts?.contact_name || cc.contact_id}</SelectItem>
+                        <SelectItem key={cc.contact_id} value={cc.contact_id}>
+                          <span className="font-medium">{cc.contacts?.contact_name || cc.contact_id}</span>
+                          {(cc.contacts?.email || cc.contacts?.phone_no) && (
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              · {cc.contacts?.email || cc.contacts?.phone_no}
+                            </span>
+                          )}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>

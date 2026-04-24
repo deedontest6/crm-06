@@ -3,11 +3,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useCampaigns, type Campaign } from "@/hooks/useCampaigns";
 import { useState, useMemo, useEffect } from "react";
-import { Globe, Plus, Pencil, Trash2, Building2, Users } from "lucide-react";
+import { Globe, Plus, Pencil, Trash2, Building2, Users, MoreHorizontal } from "lucide-react";
 import { regions, countries, countryToRegion, getCountriesForRegion, getFormattedTimezoneList, getTimezonesForCountry, getTimezoneLabel, expandRegionsForDb } from "@/utils/countryRegionMapping";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuPortal } from "@/components/ui/dropdown-menu";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "@/hooks/use-toast";
 
 interface RegionCard {
   country: string;
@@ -123,10 +125,26 @@ export function CampaignRegion({ campaign }: Props) {
   const saveCard = () => {
     if (!form.region) return;
     const updated = [...regionCards];
-    if (editIndex !== null) { updated[editIndex] = form; } else { updated.push(form); }
+    if (editIndex !== null) {
+      updated[editIndex] = form;
+    } else {
+      // Prevent duplicate (same region + country)
+      const dup = updated.some(r => r.region === form.region && (r.country || "") === (form.country || ""));
+      if (dup) {
+        toast({ title: "Already added", description: `${form.region}${form.country ? ` — ${form.country}` : ""} is already in the list.`, variant: "destructive" });
+        return;
+      }
+      updated.push(form);
+    }
     setRegionCards(updated);
     setFormOpen(false);
     persistRegions(updated);
+  };
+
+  const openAddCountryToRegion = (regionName: string) => {
+    setForm({ region: regionName, country: "", timezone: "" });
+    setEditIndex(null);
+    setFormOpen(true);
   };
 
   const confirmDeleteCard = (i: number) => {
@@ -156,39 +174,108 @@ export function CampaignRegion({ campaign }: Props) {
   };
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        {selectedRegionNames.length > 0 ? (
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1"><Building2 className="h-3.5 w-3.5" /><span className="font-medium text-foreground">{counts?.accounts ?? "…"}</span> accounts</span>
-            <span className="flex items-center gap-1"><Users className="h-3.5 w-3.5" /><span className="font-medium text-foreground">{counts?.contacts ?? "…"}</span> contacts</span>
-            <span>in {selectedRegionNames.join(", ")}</span>
-          </div>
-        ) : <span />}
-        <Button variant="outline" size="sm" onClick={openAdd}><Plus className="h-4 w-4 mr-1" /> Add Region</Button>
+    <div className="space-y-2">
+      {/* Unified toolbar */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+          <Globe className="h-3.5 w-3.5" />
+          <span><span className="font-medium text-foreground">{regionCards.length === 0 ? 0 : selectedRegionNames.length}</span> region{selectedRegionNames.length === 1 ? "" : "s"}</span>
+          <span>· <span className="font-medium text-foreground">{regionCards.length}</span> countr{regionCards.length === 1 ? "y" : "ies"}</span>
+          {selectedRegionNames.length > 0 && (
+            <>
+              <span className="flex items-center gap-1">· <Building2 className="h-3 w-3" /><span className="font-medium text-foreground">{counts?.accounts ?? "…"}</span> accounts</span>
+              <span className="flex items-center gap-1">· <Users className="h-3 w-3" /><span className="font-medium text-foreground">{counts?.contacts ?? "…"}</span> contacts</span>
+            </>
+          )}
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="h-7 text-xs"><Plus className="h-3 w-3 mr-1" /> Add</Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onClick={openAdd}>Add region</DropdownMenuItem>
+            {selectedRegionNames.length > 0 && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>Add country to region…</DropdownMenuSubTrigger>
+                <DropdownMenuPortal>
+                  <DropdownMenuSubContent>
+                    {selectedRegionNames.map(r => (
+                      <DropdownMenuItem key={r} onClick={() => openAddCountryToRegion(r)}>{r}</DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuPortal>
+              </DropdownMenuSub>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {regionCards.length === 0 && !formOpen && (
-        <p className="text-sm text-muted-foreground">No regions defined yet. Add regions to specify geographic targeting.</p>
+        <p className="text-xs text-muted-foreground">No regions defined yet. Add regions to specify geographic targeting.</p>
       )}
 
-      <div className="flex flex-wrap gap-3">
-        {regionCards.map((r, i) => (
-          <div key={i} className="border border-border rounded-lg p-3 space-y-1 flex-1 min-w-[220px]">
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-sm">{r.region}{r.country ? ` — ${r.country}` : ""}</span>
-              <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(i)}><Pencil className="h-3.5 w-3.5" /></Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => confirmDeleteCard(i)}><Trash2 className="h-3.5 w-3.5 text-muted-foreground" /></Button>
+      <div className="space-y-1.5">
+        {Object.entries(
+          regionCards.reduce<Record<string, { card: RegionCard; index: number }[]>>((acc, card, idx) => {
+            const key = card.region || "(no region)";
+            (acc[key] ||= []).push({ card, index: idx });
+            return acc;
+          }, {})
+        ).map(([regionName, group]) => (
+          <div key={regionName} className="border border-border rounded-md px-3 py-2">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 text-sm font-medium">
+                  <Globe className="h-3.5 w-3.5 text-primary" />
+                  {regionName}
+                </div>
+                {group.length > 0 && (
+                  <div className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {group.map(({ card, index }, i) => (
+                      <span key={index} className="group inline-flex items-center gap-1">
+                        {i > 0 && <span className="text-muted-foreground/50">·</span>}
+                        <span className="text-foreground/90">{card.country || "—"}</span>
+                        {card.timezone && <span>· {getTimezoneDisplay(card.timezone)}</span>}
+                        <span className="opacity-0 group-hover:opacity-100 transition-opacity inline-flex">
+                          <Button variant="ghost" size="icon" className="h-4 w-4" onClick={() => openEdit(index)} title="Edit"><Pencil className="h-2.5 w-2.5" /></Button>
+                          <Button variant="ghost" size="icon" className="h-4 w-4" onClick={() => confirmDeleteCard(index)} title="Delete"><Trash2 className="h-2.5 w-2.5 text-muted-foreground" /></Button>
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
+                    <MoreHorizontal className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => openAddCountryToRegion(regionName)}>
+                    <Plus className="h-3.5 w-3.5 mr-2" /> Add country
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={() => {
+                      // delete all cards in this region
+                      const updated = regionCards.filter(c => c.region !== regionName);
+                      setRegionCards(updated);
+                      persistRegions(updated);
+                    }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete region
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
-            {r.timezone && <p className="text-xs text-muted-foreground">{getTimezoneDisplay(r.timezone)}</p>}
           </div>
         ))}
       </div>
 
       {formOpen && (
-        <div className="border border-border rounded-lg p-4 space-y-3 bg-muted/30">
+        <div className="border border-border rounded-md p-2.5 space-y-2 bg-muted/30">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label className="text-xs">Region *</Label>

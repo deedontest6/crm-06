@@ -1,1 +1,4 @@
 project_id = "nreslricievaamrwfrlx"
+
+[functions.email-skip-report]
+verify_jwt = true

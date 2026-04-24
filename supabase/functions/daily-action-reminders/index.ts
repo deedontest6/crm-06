@@ -360,7 +360,7 @@ Deno.serve(async (req) => {
         .from('action_items')
         .select('id, title, due_date, priority, status, module_type, module_id')
         .eq('assigned_to', pref.user_id)
-        .neq('status', 'Completed')
+        .not('status', 'in', '(Completed,Cancelled)')
         .is('archived_at', null);
 
       if (aiError) {

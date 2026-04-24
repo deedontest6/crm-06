@@ -133,7 +133,7 @@ export default function ActionItems() {
   // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [filters.module_type, filters.priority, filters.status, filters.assigned_to, filters.search, filters.showArchived]);
+  }, [filters.module_type, filters.priority, filters.status, filters.assigned_to, filters.search, filters.viewFilter]);
 
   // Sort action items (memoized — avoids re-sorting 70+ items on every render)
   const sortedActionItems = useMemo(() => {
@@ -212,8 +212,10 @@ export default function ActionItems() {
   const handleStatusChange = async (id: string, status: ActionItemStatus) => {
     try {
       await updateActionItem({ id, status });
-      if (status === 'Completed' && !filters.showArchived) {
+      if (status === 'Completed' && filters.viewFilter !== 'completed') {
         toast({ title: "Item completed", description: "Moved to the Completed view." });
+      } else if (status === 'Cancelled' && filters.viewFilter !== 'cancelled') {
+        toast({ title: "Item cancelled", description: "Moved to the Cancelled view." });
       }
     } catch (error) {
       console.error('Failed to update status:', error);
@@ -361,10 +363,25 @@ export default function ActionItems() {
           {/* Spacer */}
           <div className="flex-1" />
 
-          {/* Archived Toggle - Right side */}
-          <Button variant={filters.showArchived ? "secondary" : "outline"} size="sm" onClick={() => updateFilter('showArchived', filters.showArchived ? 'false' : 'true')} className="flex items-center gap-1.5">
-            Completed
-          </Button>
+          {/* View Toggle - Right side */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant={filters.viewFilter === 'completed' ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => updateFilter('viewFilter', filters.viewFilter === 'completed' ? 'active' : 'completed')}
+              className="flex items-center gap-1.5"
+            >
+              Completed
+            </Button>
+            <Button
+              variant={filters.viewFilter === 'cancelled' ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => updateFilter('viewFilter', filters.viewFilter === 'cancelled' ? 'active' : 'cancelled')}
+              className="flex items-center gap-1.5"
+            >
+              Cancelled
+            </Button>
+          </div>
         </div>
       </div>
 

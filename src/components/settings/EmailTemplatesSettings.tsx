@@ -11,12 +11,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Plus, Edit, Trash2, Eye, Copy, Search, Mail } from "lucide-react";
+import { Plus, Edit, Trash2, Eye, Copy, Search, Mail, Sparkles } from "lucide-react";
 import { format } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { StandardPagination } from "@/components/shared/StandardPagination";
 import TemplatePreviewModal from "./email/TemplatePreviewModal";
+import { AIDraftEmailModal } from "@/components/campaigns/AIDraftEmailModal";
 
 interface EmailTemplate {
   id: string;
@@ -44,6 +45,7 @@ const EmailTemplatesSettings = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [previewTemplate, setPreviewTemplate] = useState<EmailTemplate | null>(null);
+  const [showAIDraft, setShowAIDraft] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [formData, setFormData] = useState({
     name: "",
@@ -264,10 +266,16 @@ const EmailTemplatesSettings = () => {
                 Create reusable email templates for contacting leads and contacts
               </CardDescription>
             </div>
-            <Button onClick={() => handleOpenModal()} className="gap-2">
-              <Plus className="h-4 w-4" />
-              New Template
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => setShowAIDraft(true)} className="gap-2">
+                <Sparkles className="h-4 w-4" />
+                AI Draft
+              </Button>
+              <Button onClick={() => handleOpenModal()} className="gap-2">
+                <Plus className="h-4 w-4" />
+                New Template
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -496,6 +504,16 @@ const EmailTemplatesSettings = () => {
         open={showPreviewModal}
         onOpenChange={setShowPreviewModal}
         template={previewTemplate}
+      />
+
+      <AIDraftEmailModal
+        open={showAIDraft}
+        onOpenChange={setShowAIDraft}
+        onPick={(v) => {
+          setEditingTemplate(null);
+          setFormData({ name: "AI draft", subject: v.subject, body: v.body });
+          setShowModal(true);
+        }}
       />
     </div>
   );

@@ -1,0 +1,4 @@
+CREATE INDEX IF NOT EXISTS idx_campaign_communications_conversation_id ON public.campaign_communications (conversation_id) WHERE conversation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_campaign_communications_internet_message_id ON public.campaign_communications (internet_message_id) WHERE internet_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_campaign_communications_campaign_conv ON public.campaign_communications (campaign_id, conversation_id) WHERE conversation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_campaign_communications_sent_via ON public.campaign_communications (sent_via);

@@ -31,7 +31,7 @@ export interface ActionItemFilters {
   status: ActionItemStatus | 'all';
   assigned_to: string | 'all';
   search: string;
-  showArchived: boolean;
+  viewFilter: 'active' | 'completed' | 'cancelled';
 }
 
 export interface CreateActionItemInput {
@@ -56,7 +56,7 @@ const defaultFilters: ActionItemFilters = {
   status: 'all',
   assigned_to: 'all',
   search: '',
-  showArchived: false,
+  viewFilter: 'active',
 };
 
 export function useActionItems(initialFilters?: Partial<ActionItemFilters>) {
@@ -81,7 +81,7 @@ export function useActionItems(initialFilters?: Partial<ActionItemFilters>) {
       filters.status,
       filters.assigned_to,
       filters.search,
-      filters.showArchived,
+      filters.viewFilter,
     ],
     queryFn: async () => {
       let query = supabase
@@ -107,13 +107,16 @@ export function useActionItems(initialFilters?: Partial<ActionItemFilters>) {
         query = query.ilike('title', `%${filters.search}%`);
       }
       
-      // Filter by archived/completed status
-      if (!filters.showArchived) {
+      // Filter by view (active / completed / cancelled)
+      if (filters.viewFilter === 'completed') {
+        query = query.or('status.eq.Completed,archived_at.not.is.null');
+      } else if (filters.viewFilter === 'cancelled') {
+        query = query.eq('status', 'Cancelled').is('archived_at', null);
+      } else {
+        // active: not archived, not completed, not cancelled
         query = query
           .is('archived_at', null)
-          .neq('status', 'Completed');
-      } else {
-        query = query.or('status.eq.Completed,archived_at.not.is.null');
+          .not('status', 'in', '(Completed,Cancelled)');
       }
 
       const { data, error } = await query;
@@ -502,13 +505,8 @@ export function useActionItems(initialFilters?: Partial<ActionItemFilters>) {
     error,
     filters,
     setFilters,
-    updateFilter: (key: keyof ActionItemFilters, value: string | boolean) => {
-      if (key === 'showArchived') {
-        const boolValue = typeof value === 'boolean' ? value : value === 'true';
-        setFilters((prev) => ({ ...prev, [key]: boolValue }));
-      } else {
-        setFilters((prev) => ({ ...prev, [key]: value as string }));
-      }
+    updateFilter: (key: keyof ActionItemFilters, value: string) => {
+      setFilters((prev) => ({ ...prev, [key]: value as never }));
     },
     resetFilters: () => setFilters(defaultFilters),
     createActionItem: createMutation.mutateAsync,

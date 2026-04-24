@@ -17,8 +17,8 @@ const toolByType: Record<TemplateType, any> = {
       parameters: {
         type: "object",
         properties: {
-          subject: { type: "string", description: "Compelling subject line, max 80 chars" },
-          body: { type: "string", description: "Email body, professional, 100-200 words, with placeholders like [First Name] where appropriate" },
+          subject: { type: "string", description: "Compelling subject line, max 80 chars. Use {company_name} or {first_name} where natural." },
+          body: { type: "string", description: "Email body, professional, 100-200 words. MUST include personalization placeholders: {first_name}, {company_name}, {position}. May also use {country}, {region}, {owner_name}." },
         },
         required: ["subject", "body"],
         additionalProperties: false,
@@ -33,7 +33,7 @@ const toolByType: Record<TemplateType, any> = {
       parameters: {
         type: "object",
         properties: {
-          body: { type: "string", description: "Personal connection request, MAX 300 characters" },
+          body: { type: "string", description: "Personal connection request, MAX 300 characters. MUST include {first_name} and ideally {company_name}." },
         },
         required: ["body"],
         additionalProperties: false,
@@ -48,7 +48,7 @@ const toolByType: Record<TemplateType, any> = {
       parameters: {
         type: "object",
         properties: {
-          body: { type: "string", description: "Follow-up message after connection accepted, MAX 1000 characters" },
+          body: { type: "string", description: "Follow-up after connection accepted, MAX 1000 characters. MUST include {first_name}, {company_name} and reference {position} where natural." },
         },
         required: ["body"],
         additionalProperties: false,
@@ -63,9 +63,9 @@ const toolByType: Record<TemplateType, any> = {
       parameters: {
         type: "object",
         properties: {
-          opening_script: { type: "string", description: "30-second opening pitch" },
-          talking_points: { type: "array", items: { type: "string" }, description: "3-5 key talking points" },
-          discovery_questions: { type: "array", items: { type: "string" }, description: "3-5 discovery questions to qualify" },
+          opening_script: { type: "string", description: "30-second opening pitch. MUST include {first_name} and {company_name}." },
+          talking_points: { type: "array", items: { type: "string" }, description: "3-5 key talking points tailored to the campaign goal" },
+          discovery_questions: { type: "array", items: { type: "string" }, description: "3-5 discovery questions to qualify the prospect" },
           objections: {
             type: "array",
             items: {
@@ -106,19 +106,22 @@ Deno.serve(async (req: Request) => {
     }
 
     const body = await req.json();
-    const { templateType, campaignContext, userInstructions } = body as {
+    const { templateType, campaignContext, userInstructions, tone, length } = body as {
       templateType: TemplateType;
       campaignContext: {
         campaign_name: string;
         campaign_type?: string;
         goal?: string;
         regions?: string[];
+        selectedCountries?: string[];
         accountCount?: number;
         contactCount?: number;
         sampleIndustries?: string[];
         samplePositions?: string[];
       };
       userInstructions?: string;
+      tone?: string;
+      length?: string;
     };
 
     if (!templateType || !toolByType[templateType]) {
@@ -136,19 +139,34 @@ Deno.serve(async (req: Request) => {
       ctx.campaign_type ? `Type: ${ctx.campaign_type}` : "",
       ctx.goal ? `Goal: ${ctx.goal}` : "",
       ctx.regions?.length ? `Target regions: ${ctx.regions.join(", ")}` : "",
+      ctx.selectedCountries?.length ? `Target countries: ${ctx.selectedCountries.join(", ")}` : "",
       ctx.accountCount ? `Audience: ${ctx.accountCount} accounts, ${ctx.contactCount || 0} contacts` : "",
       ctx.sampleIndustries?.length ? `Industries: ${ctx.sampleIndustries.slice(0, 5).join(", ")}` : "",
       ctx.samplePositions?.length ? `Roles: ${ctx.samplePositions.slice(0, 5).join(", ")}` : "",
     ].filter(Boolean);
 
-    const systemPrompt = `You are an expert B2B outreach copywriter. Generate a ${templateType} template that is concise, personal, value-focused, and avoids generic salesy language. Use placeholders like [First Name], [Company] where appropriate.`;
-    const userPrompt = `Campaign context:\n${contextLines.join("\n")}\n\n${userInstructions ? `Additional instructions: ${userInstructions}` : ""}`;
+    const toneText = tone ? `Tone: ${tone}.` : "Tone: professional and concise.";
+    const lengthText = length ? `Length: ${length}.` : "";
+
+    const systemPrompt = `You are an expert B2B outreach copywriter. Generate a ${templateType} template that is concise, personal, value-focused, and avoids generic salesy language. ${toneText} ${lengthText}
+
+CRITICAL: You MUST use these placeholders in your output so they auto-fill per recipient at send time:
+- {first_name} — recipient's first name (always use)
+- {company_name} — recipient's company (use when natural)
+- {position} — recipient's job title (use when relevant)
+- {country} — recipient's country (use for region-aware messaging)
+- {region} — recipient's region
+- {owner_name} — campaign owner's name (use in sign-offs)
+
+Do NOT invent fake personalization — always use the placeholders above instead of made-up names or companies.`;
+
+    const userPrompt = `Campaign context:\n${contextLines.join("\n")}\n\n${userInstructions ? `Additional instructions / angle:\n${userInstructions}` : ""}`;
 
     const aiResp = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
+        model: "google/gemini-2.5-flash",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },

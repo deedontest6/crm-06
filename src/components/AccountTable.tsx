@@ -119,10 +119,13 @@ export const AccountTable = ({
       if (statusFilter !== 'all') filters.status = statusFilter;
       if (ownerFilter !== 'all') filters.account_owner = ownerFilter;
 
+      // Skip server-side sort for client-only computed columns (e.g. linked_contacts)
+      const serverSortField = sortField && sortField !== 'linked_contacts' ? sortField : undefined;
+
       const result = await fetchPaginatedData<Account>('accounts', {
         page: currentPage,
         pageSize: itemsPerPage,
-        sortField: sortField || undefined,
+        sortField: serverSortField,
         sortDirection,
         searchTerm: debouncedSearch || undefined,
         searchFields: ['account_name', 'description', 'phone', 'country', 'industry', 'company_type', 'website'],

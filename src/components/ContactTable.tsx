@@ -60,6 +60,10 @@ interface ContactTableProps {
   refreshTrigger?: number;
   searchTerm?: string;
   setSearchTerm?: (term: string) => void;
+  /** Deep-link: id of contact to auto-open in edit modal once data loads. */
+  initialEditContactId?: string | null;
+  /** Notify parent that the deep-link has been consumed so it won't re-fire. */
+  onInitialEditConsumed?: () => void;
 }
 
 export const ContactTable = ({ 
@@ -71,7 +75,9 @@ export const ContactTable = ({
   setSelectedContacts,
   refreshTrigger,
   searchTerm = "",
-  setSearchTerm
+  setSearchTerm,
+  initialEditContactId,
+  onInitialEditConsumed,
 }: ContactTableProps) => {
   const { toast } = useToast();
   const { logDelete, logCreate } = useCRUDAudit();
@@ -135,6 +141,34 @@ export const ContactTable = ({
       fetchContacts();
     }
   }, [refreshTrigger, fetchContacts]);
+
+  // Deep-link auto-open: when parent passes initialEditContactId, find it in
+  // the loaded page (or fetch it directly) and open the edit modal.
+  useEffect(() => {
+    if (!initialEditContactId) return;
+    const inPage = pageContacts.find(c => c.id === initialEditContactId);
+    if (inPage) {
+      setEditingContact(inPage);
+      setShowModal(true);
+      onInitialEditConsumed?.();
+      return;
+    }
+    // Not in current page — fetch the contact directly so deep-link works
+    // even when the row is on another page.
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("contacts")
+        .select("*")
+        .eq("id", initialEditContactId)
+        .maybeSingle();
+      if (cancelled || !data) return;
+      setEditingContact(data as Contact);
+      setShowModal(true);
+      onInitialEditConsumed?.();
+    })();
+    return () => { cancelled = true; };
+  }, [initialEditContactId, pageContacts, setShowModal, onInitialEditConsumed]);
 
   const handleSort = (field: string) => {
     if (sortField === field) {

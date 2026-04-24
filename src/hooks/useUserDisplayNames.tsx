@@ -88,83 +88,78 @@ export const useUserDisplayNames = (userIds: string[]) => {
   return { displayNames, loading: isLoading };
 };
 
-// Helper hook that fetches all users from auth.users via user-admin edge function
-export const useAllUsers = () => {
-  const [users, setUsers] = useState<{ id: string; display_name: string; email: string; status: 'active' | 'deactivated' }[]>([]);
-  const [loading, setLoading] = useState(true);
+type AllUser = { id: string; display_name: string; email: string; status: 'active' | 'deactivated' };
 
-  useEffect(() => {
-    const fetchUsers = async () => {
-      try {
-        const { data: functionResult, error: functionError } = await supabase.functions.invoke(
-          'user-admin',
-          { method: 'GET' }
-        );
+const fetchAllUsers = async (): Promise<AllUser[]> => {
+  try {
+    const { data: functionResult, error: functionError } = await supabase.functions.invoke(
+      'user-admin',
+      { method: 'GET' }
+    );
 
-        if (functionError) throw functionError;
+    if (functionError) throw functionError;
 
-        if (functionResult?.users) {
-          const userList = functionResult.users.map((authUser: any) => {
-            const metadata = authUser.user_metadata || {};
-            let displayName = "Unknown User";
-            if (metadata.full_name?.trim() && !metadata.full_name.includes('@')) {
-              displayName = metadata.full_name.trim();
-            } else if (authUser.email) {
-              displayName = authUser.email.split('@')[0];
-            }
-            const isDeactivated = authUser.banned_until && new Date(authUser.banned_until) > new Date();
-            return {
-              id: authUser.id,
-              display_name: displayName,
-              email: authUser.email || '',
-              status: isDeactivated ? 'deactivated' as const : 'active' as const,
-            };
-          });
-
-          const sortedUsers = userList
-            .filter((u: any) => u.status === 'active')
-            .sort((a: any, b: any) => a.display_name.localeCompare(b.display_name));
-          setUsers(sortedUsers);
+    if (functionResult?.users) {
+      const userList: AllUser[] = functionResult.users.map((authUser: any) => {
+        const metadata = authUser.user_metadata || {};
+        let displayName = "Unknown User";
+        if (metadata.full_name?.trim() && !metadata.full_name.includes('@')) {
+          displayName = metadata.full_name.trim();
+        } else if (authUser.email) {
+          displayName = authUser.email.split('@')[0];
         }
-      } catch (error) {
-        console.error('useAllUsers: Error fetching users:', error);
-        try {
-          const { data, error: profilesError } = await supabase
-            .from('profiles')
-            .select('id, full_name, "Email ID"')
-            .order('full_name', { ascending: true });
+        const isDeactivated = authUser.banned_until && new Date(authUser.banned_until) > new Date();
+        return {
+          id: authUser.id,
+          display_name: displayName,
+          email: authUser.email || '',
+          status: isDeactivated ? 'deactivated' as const : 'active' as const,
+        };
+      });
 
-          if (!profilesError && data) {
-            const userList = data.map((profile: any) => {
-              let displayName = "Unknown User";
-              if (
-                profile.full_name?.trim() &&
-                !profile.full_name.includes('@') &&
-                profile.full_name !== profile["Email ID"]
-              ) {
-                displayName = profile.full_name.trim();
-              } else if (profile["Email ID"]) {
-                displayName = profile["Email ID"].split('@')[0];
-              }
-              return {
-                id: profile.id,
-                display_name: displayName,
-                email: profile["Email ID"] || '',
-                status: 'active' as const,
-              };
-            });
-            setUsers(userList);
-          }
-        } catch (fallbackError) {
-          console.error('useAllUsers: Fallback also failed:', fallbackError);
-        }
-      } finally {
-        setLoading(false);
+      return userList
+        .filter((u) => u.status === 'active')
+        .sort((a, b) => a.display_name.localeCompare(b.display_name));
+    }
+    return [];
+  } catch (error) {
+    console.error('useAllUsers: Error fetching users, falling back to profiles:', error);
+    const { data, error: profilesError } = await supabase
+      .from('profiles')
+      .select('id, full_name, "Email ID"')
+      .order('full_name', { ascending: true });
+
+    if (profilesError || !data) return [];
+
+    return data.map((profile: any) => {
+      let displayName = "Unknown User";
+      if (
+        profile.full_name?.trim() &&
+        !profile.full_name.includes('@') &&
+        profile.full_name !== profile["Email ID"]
+      ) {
+        displayName = profile.full_name.trim();
+      } else if (profile["Email ID"]) {
+        displayName = profile["Email ID"].split('@')[0];
       }
-    };
+      return {
+        id: profile.id,
+        display_name: displayName,
+        email: profile["Email ID"] || '',
+        status: 'active' as const,
+      };
+    });
+  }
+};
 
-    fetchUsers();
-  }, []);
+// Helper hook that fetches all users (cached via React Query, shared across pages)
+export const useAllUsers = () => {
+  const { data: users = [], isLoading: loading } = useQuery({
+    queryKey: ['all-users'],
+    queryFn: fetchAllUsers,
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000,
+  });
 
   const getUserDisplayName = (userId: string) => {
     const user = users.find((u) => u.id === userId);
@@ -173,3 +168,4 @@ export const useAllUsers = () => {
 
   return { users, loading, getUserDisplayName };
 };
+

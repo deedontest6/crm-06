@@ -84,6 +84,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       (event, session) => {
         if (!mounted) return;
 
+        console.info("[auth] state change", {
+          event,
+          hasSession: !!session,
+          path: window.location.pathname,
+        });
+
         // Safari-compatible session handling
         if (session) {
           setSession(session);
@@ -95,17 +101,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         
         if (event === 'SIGNED_OUT') {
           cleanupAuthState();
-          // Use replace instead of href for Safari compatibility
-          if (window.location.pathname !== '/auth') {
-            window.location.replace('/auth');
-          }
-        }
-        
-        if (event === 'SIGNED_IN' && session) {
-          // Ensure we're on the right page after successful login
-          if (window.location.pathname === '/auth') {
-            window.location.replace('/');
-          }
         }
         
         setLoading(false);
@@ -137,6 +132,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       } catch (error) {
         if (!mounted) return;
         console.error('Session retrieval failed:', error);
+        cleanupAuthState();
+        setSession(null);
+        setUser(null);
       } finally {
         if (mounted && !sessionFetched) {
           setLoading(false);
@@ -154,21 +152,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const signOut = async () => {
     try {
-      // Clean up auth state first
-      cleanupAuthState();
-      
-      // Safari-compatible sign out
       const { error } = await supabase.auth.signOut({ scope: 'global' });
       if (error) {
         console.warn('Sign out error:', error);
       }
-      
-      // Force redirect using replace for Safari
-      window.location.replace('/auth');
+      cleanupAuthState();
+      setSession(null);
+      setUser(null);
     } catch (error) {
       console.error('Error signing out:', error);
-      // Force redirect even if sign out fails
-      window.location.replace('/auth');
+      cleanupAuthState();
+      setSession(null);
+      setUser(null);
     }
   };
 

@@ -17,6 +17,12 @@ export interface SendEmailResult {
   sentAsUser?: boolean;
 }
 
+export interface GraphAttachment {
+  name: string;
+  contentBytesBase64: string;
+  contentType?: string;
+}
+
 export function getAzureEmailConfig(): AzureEmailConfig | null {
   const tenantId = Deno.env.get("AZURE_EMAIL_TENANT_ID") || Deno.env.get("AZURE_TENANT_ID");
   const clientId = Deno.env.get("AZURE_EMAIL_CLIENT_ID") || Deno.env.get("AZURE_CLIENT_ID");
@@ -51,11 +57,6 @@ export async function getGraphAccessToken(config: AzureEmailConfig): Promise<str
   return data.access_token;
 }
 
-/**
- * Send email via Graph using the sender's own mailbox so campaign emails
- * always appear from the logged-in user, not the shared CRM mailbox.
- * After sending, poll Sent Items to retrieve conversation/thread metadata.
- */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -106,11 +107,11 @@ async function fetchSentMessageMetadata(
         recipientMatches[0];
 
       if (match) {
-        const graphMessageId = match.id || undefined;
-        const internetMessageId = match.internetMessageId || undefined;
-        const conversationId = match.conversationId || undefined;
-        console.log(`Retrieved sent message metadata for ${mailboxEmail}: graphId=${graphMessageId}, internetMsgId=${internetMessageId}, convId=${conversationId}`);
-        return { graphMessageId, internetMessageId, conversationId };
+        return {
+          graphMessageId: match.id || undefined,
+          internetMessageId: match.internetMessageId || undefined,
+          conversationId: match.conversationId || undefined,
+        };
       }
     } catch (metaErr) {
       console.warn(`Error retrieving sent message metadata for ${mailboxEmail} on attempt ${attempt + 1}:`, metaErr);
@@ -121,6 +122,48 @@ async function fetchSentMessageMetadata(
   return {};
 }
 
+export async function findSentMessageGraphId(
+  accessToken: string,
+  mailboxEmail: string,
+  internetMessageId?: string | null,
+  conversationId?: string | null,
+): Promise<string | undefined> {
+  if (!internetMessageId && !conversationId) return undefined;
+
+  const sentItemsUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/sentitems/messages?$top=25&$orderby=sentDateTime desc&$select=id,internetMessageId,conversationId`;
+
+  try {
+    const sentResp = await fetch(sentItemsUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!sentResp.ok) {
+      const errText = await sentResp.text();
+      console.warn(`Failed to resolve sent graph message id for ${mailboxEmail}: ${sentResp.status} ${errText}`);
+      return undefined;
+    }
+
+    const sentData = await sentResp.json();
+    const messages = Array.isArray(sentData.value) ? sentData.value : [];
+    const exactInternetMessageMatch = internetMessageId
+      ? messages.find((message: any) => message.internetMessageId === internetMessageId)
+      : undefined;
+
+    if (exactInternetMessageMatch?.id) {
+      return exactInternetMessageMatch.id;
+    }
+
+    const conversationMatch = conversationId
+      ? messages.find((message: any) => message.conversationId === conversationId)
+      : undefined;
+
+    return conversationMatch?.id;
+  } catch (error) {
+    console.warn(`Error resolving sent graph message id for ${mailboxEmail}:`, error);
+    return undefined;
+  }
+}
+
 export async function sendEmailViaGraph(
   accessToken: string,
   senderEmail: string,
@@ -129,22 +172,35 @@ export async function sendEmailViaGraph(
   subject: string,
   htmlBody: string,
   fromEmail?: string,
-  replyToInternetMessageId?: string,
+  _replyToGraphMessageId?: string,
+  _replyToInternetMessageId?: string,
+  attachments?: GraphAttachment[],
 ): Promise<SendEmailResult> {
   const senderMailbox = (fromEmail || senderEmail).trim();
-  const sendUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(senderMailbox)}/sendMail`;
+  const encodedMailbox = encodeURIComponent(senderMailbox);
+  const sendUrl = `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/sendMail`;
+
+  // For replies, ensure subject has "Re:" prefix (thread correlation via conversationId after send)
+  let finalSubject = subject;
+  if (_replyToGraphMessageId || _replyToInternetMessageId) {
+    if (!/^re\s*:/i.test(finalSubject)) {
+      finalSubject = `Re: ${finalSubject}`;
+    }
+  }
 
   const message: Record<string, unknown> = {
-    subject,
+    subject: finalSubject,
     body: { contentType: "HTML", content: htmlBody },
     toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
   };
 
-  if (replyToInternetMessageId) {
-    message.internetMessageHeaders = [
-      { name: "In-Reply-To", value: replyToInternetMessageId },
-      { name: "References", value: replyToInternetMessageId },
-    ];
+  if (attachments && attachments.length > 0) {
+    message.attachments = attachments.map((a) => ({
+      "@odata.type": "#microsoft.graph.fileAttachment",
+      name: a.name,
+      contentType: a.contentType || "application/octet-stream",
+      contentBytes: a.contentBytesBase64,
+    }));
   }
 
   const sendResp = await fetch(sendUrl, {
@@ -169,7 +225,7 @@ export async function sendEmailViaGraph(
 
   await sendResp.text();
 
-  const metadata = await fetchSentMessageMetadata(accessToken, senderMailbox, subject, recipientEmail);
+  const metadata = await fetchSentMessageMetadata(accessToken, senderMailbox, finalSubject, recipientEmail);
 
   return {
     success: true,

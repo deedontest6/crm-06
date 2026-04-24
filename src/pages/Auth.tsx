@@ -7,28 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 
-// Safari-compatible cleanup utility
-const cleanupAuthState = () => {
-  try {
-    if (typeof Storage !== 'undefined' && typeof localStorage !== 'undefined') {
-      Object.keys(localStorage).forEach((key) => {
-        if (key.startsWith('supabase.auth.') || key.includes('sb-')) {
-          try { localStorage.removeItem(key); } catch {}
-        }
-      });
-    }
-    if (typeof Storage !== 'undefined' && typeof sessionStorage !== 'undefined') {
-      Object.keys(sessionStorage).forEach((key) => {
-        if (key.startsWith('supabase.auth.') || key.includes('sb-')) {
-          try { sessionStorage.removeItem(key); } catch {}
-        }
-      });
-    }
-  } catch (error) {
-    console.warn('Cleanup error:', error);
-  }
-};
-
 const Auth = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,14 +18,6 @@ const Auth = () => {
     setLoading(true);
 
     try {
-      cleanupAuthState();
-
-      try {
-        await supabase.auth.signOut({ scope: 'global' });
-      } catch (err) {
-        // best-effort
-      }
-
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
@@ -64,8 +34,6 @@ const Auth = () => {
 
       if (data.user && data.session) {
         toast({ title: "Success", description: "Logged in successfully!" });
-        // onAuthStateChange in useAuth handles redirect; force as fallback.
-        window.location.replace("/");
       }
     } catch (error: any) {
       toast({
