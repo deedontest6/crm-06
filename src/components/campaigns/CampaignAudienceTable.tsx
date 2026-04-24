@@ -44,6 +44,17 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [syncError, setSyncError] = useState(false);
 
+  // Snap channel filter back to "all" if the chosen channel was disabled on the campaign.
+  useEffect(() => {
+    if (channelFilter === "all") return;
+    const stillEnabled =
+      (channelFilter === "Email" && showEmail) ||
+      (channelFilter === "LinkedIn" && showLinkedIn) ||
+      (channelFilter === "Phone" && showPhone);
+    if (!stillEnabled) setChannelFilter("all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEmail, showLinkedIn, showPhone]);
+
   // Lightweight fetch of the campaign's primary channel — used to flag contacts
   // unreachable on the campaign's preferred outreach method.
   const { data: campaignMeta } = useQuery({
