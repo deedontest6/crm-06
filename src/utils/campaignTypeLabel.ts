@@ -34,8 +34,28 @@ export const CHANNEL_OPTIONS = [
   { value: "Email", label: "Email" },
   { value: "Phone", label: "Phone" },
   { value: "LinkedIn", label: "LinkedIn" },
-  { value: "Mixed", label: "Mixed" },
 ];
+
+export const ALL_CHANNELS = ["Email", "Phone", "LinkedIn"] as const;
+export type ChannelKey = typeof ALL_CHANNELS[number];
+
+/** Normalize legacy "Call" -> "Phone" and trim whitespace. */
+export function normalizeChannelValue(v?: string | null): string {
+  if (!v) return "";
+  const t = v.trim();
+  return t === "Call" ? "Phone" : t;
+}
+
+/** Resolve enabled channels for a campaign with legacy fallback to primary_channel. */
+export function getEnabledChannels(campaign: { enabled_channels?: string[] | null; primary_channel?: string | null } | null | undefined): ChannelKey[] {
+  if (!campaign) return [...ALL_CHANNELS];
+  const arr = (campaign.enabled_channels || []).map(normalizeChannelValue).filter(Boolean) as ChannelKey[];
+  if (arr.length > 0) return arr.filter((c) => (ALL_CHANNELS as readonly string[]).includes(c));
+  // Legacy: derive from primary_channel
+  const pc = normalizeChannelValue(campaign.primary_channel);
+  if (pc && (ALL_CHANNELS as readonly string[]).includes(pc)) return [pc as ChannelKey];
+  return [...ALL_CHANNELS];
+}
 
 export const PRIORITY_BADGE_CLASS: Record<string, string> = {
   Low: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
