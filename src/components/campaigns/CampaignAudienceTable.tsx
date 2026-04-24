@@ -456,30 +456,36 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
                   </TooltipTrigger>
                   <TooltipContent className="text-xs">All contacts</TooltipContent>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <ToggleGroupItem value="Email" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
-                      <Mail className="h-3 w-3" /> {reach.email}
-                    </ToggleGroupItem>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs">Email · {reach.email} reachable</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <ToggleGroupItem value="LinkedIn" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
-                      <Linkedin className="h-3 w-3" /> {reach.linkedin}
-                    </ToggleGroupItem>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs">LinkedIn · {reach.linkedin} reachable</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <ToggleGroupItem value="Phone" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
-                      <Phone className="h-3 w-3" /> {reach.phone}
-                    </ToggleGroupItem>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs">Phone · {reach.phone} reachable</TooltipContent>
-                </Tooltip>
+                {showEmail && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="Email" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
+                        <Mail className="h-3 w-3" /> {reach.email}
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent className="text-xs">Email · {reach.email} reachable</TooltipContent>
+                  </Tooltip>
+                )}
+                {showLinkedIn && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="LinkedIn" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
+                        <Linkedin className="h-3 w-3" /> {reach.linkedin}
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent className="text-xs">LinkedIn · {reach.linkedin} reachable</TooltipContent>
+                  </Tooltip>
+                )}
+                {showPhone && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="Phone" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
+                        <Phone className="h-3 w-3" /> {reach.phone}
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent className="text-xs">Phone · {reach.phone} reachable</TooltipContent>
+                  </Tooltip>
+                )}
               </ToggleGroup>
             )}
           </div>
