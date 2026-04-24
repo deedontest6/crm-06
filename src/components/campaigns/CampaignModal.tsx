@@ -93,6 +93,9 @@ export function CampaignModal({ open, onClose, campaign, onCreated }: CampaignMo
       newErrors.end_date = "Must be after start";
     }
     if (formData.goal && formData.goal.length > 1000) newErrors.goal = "Too long";
+    if (!formData.enabled_channels || formData.enabled_channels.length === 0) {
+      newErrors.enabled_channels = "Select at least one channel";
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -209,16 +212,54 @@ export function CampaignModal({ open, onClose, campaign, onCreated }: CampaignMo
             </div>
 
             <div className="space-y-1">
-              <Label className="text-xs font-medium">Channel</Label>
-              <Select value={formData.primary_channel || "none"} onValueChange={(v) => setFormData({ ...formData, primary_channel: v === "none" ? "" : v })}>
-                <SelectTrigger className="h-9"><SelectValue placeholder="Mixed (all channels)" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Mixed (all channels)</SelectItem>
-                  {CHANNEL_OPTIONS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Label className="text-xs font-medium">Channels *</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {CHANNEL_OPTIONS.map((c) => {
+                  const active = formData.enabled_channels?.includes(c.value);
+                  return (
+                    <button
+                      type="button"
+                      key={c.value}
+                      onClick={() => {
+                        const cur = new Set(formData.enabled_channels || []);
+                        if (cur.has(c.value)) cur.delete(c.value); else cur.add(c.value);
+                        const next = Array.from(cur);
+                        // Ensure default channel still in enabled set
+                        let nextDefault = formData.primary_channel || "";
+                        if (!next.includes(nextDefault)) nextDefault = next[0] || "";
+                        setFormData({ ...formData, enabled_channels: next, primary_channel: nextDefault });
+                      }}
+                      className={`px-2.5 h-7 rounded-full text-xs border transition-colors ${
+                        active
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "bg-background text-muted-foreground border-border hover:bg-muted"
+                      }`}
+                    >
+                      {c.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {errors.enabled_channels && <p className="text-xs text-destructive">{errors.enabled_channels}</p>}
+              {formData.enabled_channels && formData.enabled_channels.length > 1 && (
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-muted-foreground">Default:</span>
+                  {formData.enabled_channels.map((ch) => (
+                    <label key={ch} className="flex items-center gap-1 text-[10px] cursor-pointer">
+                      <input
+                        type="radio"
+                        name="default-channel"
+                        className="h-3 w-3"
+                        checked={formData.primary_channel === ch}
+                        onChange={() => setFormData({ ...formData, primary_channel: ch })}
+                      />
+                      {ch}
+                    </label>
+                  ))}
+                </div>
+              )}
               <p className="text-[10px] text-muted-foreground leading-tight">
-                Picking a single channel hides the other channel tabs in Setup &amp; Monitoring. Choose Mixed to keep all options.
+                Disabled channels won't appear in Audience reachability or Monitoring tabs.
               </p>
             </div>
           </div>
