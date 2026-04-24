@@ -281,6 +281,36 @@ export type Database = {
         }
         Relationships: []
       }
+      campaign_audience_segments: {
+        Row: {
+          campaign_id: string
+          created_at: string
+          created_by: string | null
+          filters: Json
+          id: string
+          segment_name: string
+          updated_at: string
+        }
+        Insert: {
+          campaign_id: string
+          created_at?: string
+          created_by?: string | null
+          filters?: Json
+          id?: string
+          segment_name: string
+          updated_at?: string
+        }
+        Update: {
+          campaign_id?: string
+          created_at?: string
+          created_by?: string | null
+          filters?: Json
+          id?: string
+          segment_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       campaign_communications: {
         Row: {
           account_id: string | null
@@ -512,6 +542,8 @@ export type Database = {
           created_by: string | null
           email_type: string | null
           id: string
+          region: string | null
+          segment_id: string | null
           subject: string | null
           template_name: string
         }
@@ -523,6 +555,8 @@ export type Database = {
           created_by?: string | null
           email_type?: string | null
           id?: string
+          region?: string | null
+          segment_id?: string | null
           subject?: string | null
           template_name: string
         }
@@ -534,6 +568,8 @@ export type Database = {
           created_by?: string | null
           email_type?: string | null
           id?: string
+          region?: string | null
+          segment_id?: string | null
           subject?: string | null
           template_name?: string
         }
@@ -543,6 +579,13 @@ export type Database = {
             columns: ["campaign_id"]
             isOneToOne: false
             referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "campaign_email_templates_segment_id_fkey"
+            columns: ["segment_id"]
+            isOneToOne: false
+            referencedRelation: "campaign_audience_segments"
             referencedColumns: ["id"]
           },
         ]
@@ -861,6 +904,7 @@ export type Database = {
           created_at: string | null
           created_by: string
           description: string | null
+          enabled_channels: string[] | null
           end_date: string | null
           goal: string | null
           id: string
@@ -888,6 +932,7 @@ export type Database = {
           created_at?: string | null
           created_by: string
           description?: string | null
+          enabled_channels?: string[] | null
           end_date?: string | null
           goal?: string | null
           id?: string
@@ -915,6 +960,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string
           description?: string | null
+          enabled_channels?: string[] | null
           end_date?: string | null
           goal?: string | null
           id?: string

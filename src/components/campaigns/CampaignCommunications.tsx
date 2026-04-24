@@ -278,7 +278,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaigns")
-        .select("primary_channel")
+        .select("primary_channel, enabled_channels")
         .eq("id", campaignId)
         .maybeSingle();
       if (error) throw error;
@@ -287,16 +287,30 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     staleTime: 5 * 60_000,
   });
   const primaryChannel = (campaignMeta?.primary_channel || "").trim();
+  // Resolve enabled channels (multi-channel) with legacy fallback to primary_channel.
+  const enabledChannels = useMemo<string[]>(() => {
+    const raw = (campaignMeta as any)?.enabled_channels as string[] | null | undefined;
+    const norm = (v: string) => (v === "Call" ? "Phone" : v);
+    if (raw && raw.length > 0) return raw.map(norm).filter((v) => ["Email", "Phone", "LinkedIn"].includes(v));
+    if (primaryChannel) return [norm(primaryChannel)];
+    return ["Email", "Phone", "LinkedIn"];
+  }, [campaignMeta, primaryChannel]);
+  const enableEmail = enabledChannels.includes("Email");
+  const enablePhone = enabledChannels.includes("Phone");
+  const enableLinkedIn = enabledChannels.includes("LinkedIn");
 
-  // Snap channel tab to a visible one when campaign is restricted to a single channel.
+  // Snap outreach tab to the first enabled channel if current one is disabled.
   useEffect(() => {
-    if (!primaryChannel) return;
-    const allowed: OutreachTab =
-      primaryChannel === "Email" ? "email" :
-      primaryChannel === "LinkedIn" ? "linkedin" :
-      (primaryChannel === "Phone" || primaryChannel === "Call") ? "call" : outreachTab;
-    if (allowed !== outreachTab) setOutreachTab(allowed);
-  }, [primaryChannel]);
+    const tabAllowed =
+      (outreachTab === "email" && enableEmail) ||
+      (outreachTab === "linkedin" && enableLinkedIn) ||
+      (outreachTab === "call" && enablePhone);
+    if (tabAllowed) return;
+    if (enableEmail) setOutreachTab("email");
+    else if (enableLinkedIn) setOutreachTab("linkedin");
+    else if (enablePhone) setOutreachTab("call");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enableEmail, enableLinkedIn, enablePhone]);
 
   // Note: per-contact outreach timeline is fetched inside the Log Outreach modal
   // (see logForm.contact_id-keyed useQuery below `logForm` declaration).
@@ -1640,21 +1654,21 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
             RIGHT: [Clear] [View switch] [Synced · refresh] [Primary Action] [Ended] */}
         <div className="flex flex-wrap items-center gap-2">
           <TabsList className="h-7">
-            {(!primaryChannel || primaryChannel === "Email") && (
+            {enableEmail && (
               <TabsTrigger value="email" className="text-xs h-6 px-2.5 gap-1.5">
                 <Mail className="h-3 w-3" /> Email
                 <span className="tabular-nums text-muted-foreground">{reachableCounts.email}/{campaignContacts.length}</span>
               </TabsTrigger>
             )}
-            {(!primaryChannel || primaryChannel === "LinkedIn") && (
+            {enableLinkedIn && (
               <TabsTrigger value="linkedin" className="text-xs h-6 px-2.5 gap-1.5">
                 <Linkedin className="h-3 w-3" /> LinkedIn
                 <span className="tabular-nums text-muted-foreground">{reachableCounts.linkedin}/{campaignContacts.length}</span>
               </TabsTrigger>
             )}
-            {(!primaryChannel || primaryChannel === "Phone" || primaryChannel === "Call") && (
+            {enablePhone && (
               <TabsTrigger value="call" className="text-xs h-6 px-2.5 gap-1.5">
-                <Phone className="h-3 w-3" /> Call
+                <Phone className="h-3 w-3" /> Phone
                 <span className="tabular-nums text-muted-foreground">{reachableCounts.phone}/{campaignContacts.length}</span>
               </TabsTrigger>
             )}

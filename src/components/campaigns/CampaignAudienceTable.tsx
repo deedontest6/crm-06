@@ -51,7 +51,7 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaigns")
-        .select("primary_channel, campaign_name")
+        .select("primary_channel, campaign_name, enabled_channels")
         .eq("id", campaignId)
         .maybeSingle();
       if (error) throw error;
@@ -60,6 +60,28 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
   });
   const primaryChannel = (campaignMeta?.primary_channel || "").trim();
   const campaignName = (campaignMeta as any)?.campaign_name || "campaign";
+  // Resolve enabled channels (legacy fallback to primary_channel; default to all 3)
+  const enabledChannels = useMemo<string[]>(() => {
+    const raw = (campaignMeta as any)?.enabled_channels as string[] | null | undefined;
+    const norm = (v: string) => (v === "Call" ? "Phone" : v);
+    if (raw && raw.length > 0) return raw.map(norm).filter((v) => ["Email", "Phone", "LinkedIn"].includes(v));
+    if (primaryChannel) return [norm(primaryChannel)];
+    return ["Email", "Phone", "LinkedIn"];
+  }, [campaignMeta, primaryChannel]);
+  const showEmail = enabledChannels.includes("Email");
+  const showPhone = enabledChannels.includes("Phone");
+  const showLinkedIn = enabledChannels.includes("LinkedIn");
+
+  // Snap channel filter back to "all" if the chosen channel was disabled on the campaign.
+  useEffect(() => {
+    if (channelFilter === "all") return;
+    const stillEnabled =
+      (channelFilter === "Email" && showEmail) ||
+      (channelFilter === "LinkedIn" && showLinkedIn) ||
+      (channelFilter === "Phone" && showPhone);
+    if (!stillEnabled) setChannelFilter("all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEmail, showLinkedIn, showPhone]);
 
   const { data: campaignAccounts = [], isFetching: accountsFetching } = useQuery({
     queryKey: ["campaign-audience-accounts", campaignId],
@@ -445,30 +467,36 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
                   </TooltipTrigger>
                   <TooltipContent className="text-xs">All contacts</TooltipContent>
                 </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <ToggleGroupItem value="Email" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
-                      <Mail className="h-3 w-3" /> {reach.email}
-                    </ToggleGroupItem>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs">Email · {reach.email} reachable</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <ToggleGroupItem value="LinkedIn" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
-                      <Linkedin className="h-3 w-3" /> {reach.linkedin}
-                    </ToggleGroupItem>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs">LinkedIn · {reach.linkedin} reachable</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <ToggleGroupItem value="Phone" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
-                      <Phone className="h-3 w-3" /> {reach.phone}
-                    </ToggleGroupItem>
-                  </TooltipTrigger>
-                  <TooltipContent className="text-xs">Phone · {reach.phone} reachable</TooltipContent>
-                </Tooltip>
+                {showEmail && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="Email" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
+                        <Mail className="h-3 w-3" /> {reach.email}
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent className="text-xs">Email · {reach.email} reachable</TooltipContent>
+                  </Tooltip>
+                )}
+                {showLinkedIn && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="LinkedIn" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
+                        <Linkedin className="h-3 w-3" /> {reach.linkedin}
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent className="text-xs">LinkedIn · {reach.linkedin} reachable</TooltipContent>
+                  </Tooltip>
+                )}
+                {showPhone && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="Phone" className="h-7 px-2 text-[11px] gap-1 tabular-nums">
+                        <Phone className="h-3 w-3" /> {reach.phone}
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent className="text-xs">Phone · {reach.phone} reachable</TooltipContent>
+                  </Tooltip>
+                )}
               </ToggleGroup>
             )}
           </div>

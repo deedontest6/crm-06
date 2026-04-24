@@ -24,6 +24,7 @@ export interface CampaignFormData {
   mart_complete?: boolean;
   priority?: string;
   primary_channel?: string;
+  enabled_channels?: string[];
   tags?: string[];
 }
 
@@ -96,6 +97,9 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
           message_strategy: formData.message_strategy || null,
           priority: formData.priority || "Medium",
           primary_channel: formData.primary_channel || null,
+          enabled_channels: (formData.enabled_channels && formData.enabled_channels.length > 0)
+            ? formData.enabled_channels
+            : ["Email", "Phone", "LinkedIn"],
           tags: formData.tags && formData.tags.length > 0 ? formData.tags : null,
           created_by: user!.id,
         } as any);
