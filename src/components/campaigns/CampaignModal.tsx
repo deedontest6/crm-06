@@ -36,7 +36,8 @@ export function CampaignModal({ open, onClose, campaign, onCreated }: CampaignMo
     notes: "",
     description: "",
     priority: "Medium",
-    primary_channel: "",
+    primary_channel: "Email",
+    enabled_channels: ["Email", "Phone", "LinkedIn"],
     tags: [],
   };
 
@@ -51,6 +52,14 @@ export function CampaignModal({ open, onClose, campaign, onCreated }: CampaignMo
       const normalizedType = CAMPAIGN_TYPE_OPTIONS.find((o) => o.value === rawType)
         ? rawType
         : campaignTypeLabel(rawType);
+      // Resolve enabled_channels with legacy fallback to primary_channel
+      const rawEnabled: string[] = Array.isArray(c.enabled_channels) && c.enabled_channels.length > 0
+        ? c.enabled_channels.map((v: string) => (v === "Call" ? "Phone" : v))
+        : (c.primary_channel ? [c.primary_channel === "Call" ? "Phone" : c.primary_channel] : ["Email", "Phone", "LinkedIn"]);
+      const enabled = rawEnabled.filter((v) => ["Email", "Phone", "LinkedIn"].includes(v));
+      const defaultCh = enabled.includes(c.primary_channel === "Call" ? "Phone" : c.primary_channel)
+        ? (c.primary_channel === "Call" ? "Phone" : c.primary_channel)
+        : enabled[0] || "Email";
       setFormData({
         campaign_name: campaign.campaign_name,
         campaign_type: normalizedType,
@@ -62,7 +71,8 @@ export function CampaignModal({ open, onClose, campaign, onCreated }: CampaignMo
         notes: campaign.notes || "",
         description: campaign.description || "",
         priority: c.priority || "Medium",
-        primary_channel: c.primary_channel || "",
+        primary_channel: defaultCh,
+        enabled_channels: enabled.length > 0 ? enabled : ["Email"],
         tags: Array.isArray(c.tags) ? c.tags : [],
       });
     } else {
