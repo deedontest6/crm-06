@@ -1654,21 +1654,21 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
             RIGHT: [Clear] [View switch] [Synced · refresh] [Primary Action] [Ended] */}
         <div className="flex flex-wrap items-center gap-2">
           <TabsList className="h-7">
-            {(!primaryChannel || primaryChannel === "Email") && (
+            {enableEmail && (
               <TabsTrigger value="email" className="text-xs h-6 px-2.5 gap-1.5">
                 <Mail className="h-3 w-3" /> Email
                 <span className="tabular-nums text-muted-foreground">{reachableCounts.email}/{campaignContacts.length}</span>
               </TabsTrigger>
             )}
-            {(!primaryChannel || primaryChannel === "LinkedIn") && (
+            {enableLinkedIn && (
               <TabsTrigger value="linkedin" className="text-xs h-6 px-2.5 gap-1.5">
                 <Linkedin className="h-3 w-3" /> LinkedIn
                 <span className="tabular-nums text-muted-foreground">{reachableCounts.linkedin}/{campaignContacts.length}</span>
               </TabsTrigger>
             )}
-            {(!primaryChannel || primaryChannel === "Phone" || primaryChannel === "Call") && (
+            {enablePhone && (
               <TabsTrigger value="call" className="text-xs h-6 px-2.5 gap-1.5">
-                <Phone className="h-3 w-3" /> Call
+                <Phone className="h-3 w-3" /> Phone
                 <span className="tabular-nums text-muted-foreground">{reachableCounts.phone}/{campaignContacts.length}</span>
               </TabsTrigger>
             )}
