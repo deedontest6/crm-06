@@ -51,7 +51,7 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaigns")
-        .select("primary_channel, campaign_name")
+        .select("primary_channel, campaign_name, enabled_channels")
         .eq("id", campaignId)
         .maybeSingle();
       if (error) throw error;
@@ -60,6 +60,17 @@ export function CampaignAudienceTable({ campaignId, isCampaignEnded, selectedReg
   });
   const primaryChannel = (campaignMeta?.primary_channel || "").trim();
   const campaignName = (campaignMeta as any)?.campaign_name || "campaign";
+  // Resolve enabled channels (legacy fallback to primary_channel; default to all 3)
+  const enabledChannels = useMemo<string[]>(() => {
+    const raw = (campaignMeta as any)?.enabled_channels as string[] | null | undefined;
+    const norm = (v: string) => (v === "Call" ? "Phone" : v);
+    if (raw && raw.length > 0) return raw.map(norm).filter((v) => ["Email", "Phone", "LinkedIn"].includes(v));
+    if (primaryChannel) return [norm(primaryChannel)];
+    return ["Email", "Phone", "LinkedIn"];
+  }, [campaignMeta, primaryChannel]);
+  const showEmail = enabledChannels.includes("Email");
+  const showPhone = enabledChannels.includes("Phone");
+  const showLinkedIn = enabledChannels.includes("LinkedIn");
 
   const { data: campaignAccounts = [], isFetching: accountsFetching } = useQuery({
     queryKey: ["campaign-audience-accounts", campaignId],
