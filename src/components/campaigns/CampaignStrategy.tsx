@@ -3,14 +3,18 @@ import { useState, useMemo, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CheckCircle2, Circle, ChevronDown, ChevronsUpDown, Mail, Users, Globe, Clock } from "lucide-react";
-import { toast } from "sonner";
+// Tabs no longer used after Audience sub-tabs were removed.
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { CampaignMessage } from "./CampaignMessage";
 import { CampaignAudience } from "./CampaignAudience";
 import { CampaignRegion } from "./CampaignRegion";
 import { CampaignTiming } from "./CampaignTiming";
-import { FollowUpRulesPanel } from "./FollowUpRulesPanel";
+// FollowUpRulesPanel removed — sequences own follow-up cadence as of Phase B.
+// SequencesPanel was merged into CampaignTiming so the Timing accordion renders one cohesive panel.
+// SegmentManager removed from Setup; legacy file kept for backwards compatibility with Communications/Message panels.
 import type { Campaign } from "@/hooks/useCampaigns";
 
 interface Props {
@@ -26,12 +30,15 @@ interface Props {
   endDate?: string | null;
   initialOpenSection?: "region" | "audience" | "message" | "timing";
   audienceView?: "accounts" | "contacts";
+  /** When true (campaign Completed), Message section hides create/edit actions. */
+  isReadOnly?: boolean;
   contentCounts?: {
     emailTemplateCount: number;
     phoneScriptCount: number;
     linkedinTemplateCount: number;
     materialCount: number;
     regionCount: number;
+    countryCount?: number;
     accountCount: number;
     contactCount: number;
     /** F2: number of audience contacts reachable on the campaign's primary channel. */
@@ -50,11 +57,13 @@ export function parseSelectedRegions(raw: string | null): string[] {
   return raw && !raw.startsWith("[") ? [raw] : [];
 }
 
-export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, updateStrategyFlag, isCampaignEnded, daysRemaining, timingNotes, campaignName, campaignOwner, endDate, initialOpenSection, audienceView, contentCounts }: Props) {
+export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, updateStrategyFlag, isCampaignEnded, daysRemaining, timingNotes, initialOpenSection, audienceView, isReadOnly = false, contentCounts }: Props) {
   const queryClient = useQueryClient();
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     region: true, audience: false, message: false, timing: false,
   });
+  // Audience sub-tabs and the legacy SegmentManager were removed in favor of
+  // an inline Account / Contact / Industry / Position filter inside CampaignAudience.
 
   useEffect(() => {
     if (!initialOpenSection) return;
@@ -81,10 +90,21 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
   const validateSection = (key: string): string | null => {
     const counts = contentCounts;
     switch (key) {
-      case "region":
-        if ((counts?.regionCount ?? 0) === 0)
-          return "Add at least 1 region before marking Region as done.";
+      case "region": {
+        // Accept either a region OR a country selection. The compose payload
+        // can be `[{country: 'DE'}]` with no region field — that's still a
+        // valid geographic scope. Previously the validator only counted regions.
+        let countryCount = 0;
+        try {
+          const parsed = campaign.region ? JSON.parse(campaign.region) : null;
+          if (Array.isArray(parsed)) {
+            countryCount = parsed.filter((r: any) => r?.country).length;
+          }
+        } catch { /* legacy plain-string region — ignore */ }
+        if ((counts?.regionCount ?? 0) === 0 && countryCount === 0)
+          return "Add at least 1 region or country before marking Region as done.";
         return null;
+      }
       case "audience":
         if ((counts?.accountCount ?? 0) === 0 && (counts?.contactCount ?? 0) === 0)
           return "Add at least 1 account or contact before marking Audience as done.";
@@ -110,16 +130,16 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
   const handleMarkDone = async (flag: string, label: string, key: string) => {
     const validationError = validateSection(key);
     if (validationError) {
-      toast.warning(validationError);
+      toast({ title: validationError });
       return;
     }
     await updateStrategyFlag(flag, true);
-    toast.success(`${label} marked as done`);
+    toast({ title: `${label} marked as done` });
   };
 
   const handleUnmark = async (flag: string, label: string) => {
     await updateStrategyFlag(flag, false);
-    toast.info(`${label} unmarked`);
+    toast({ title: `${label} unmarked` });
   };
 
   const handleSaveTimingNotes = async (notes: string) => {
@@ -131,7 +151,7 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
       await supabase.from("campaign_mart").insert({ campaign_id: campaignId, timing_notes: notes });
     }
     queryClient.invalidateQueries({ queryKey: ["campaign-mart", campaignId] });
-    toast.success("Timing note saved");
+    toast({ title: "Timing note saved" });
   };
 
   const completedCount = [isStrategyComplete.region, isStrategyComplete.audience, isStrategyComplete.message, isStrategyComplete.timing].filter(Boolean).length;
@@ -140,10 +160,20 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
   const getContentSummary = (key: string): string => {
     if (!contentCounts) return "";
     switch (key) {
-      case "region":
-        return contentCounts.regionCount > 0 ? `${contentCounts.regionCount} region${contentCounts.regionCount > 1 ? "s" : ""}` : "No regions";
-      case "audience":
-        return `${contentCounts.accountCount} accounts · ${contentCounts.contactCount} contacts`;
+      case "region": {
+        const r = contentCounts.regionCount;
+        const c = contentCounts.countryCount ?? 0;
+        if (r === 0 && c === 0) return "No regions";
+        const parts: string[] = [];
+        parts.push(`${r} region${r === 1 ? "" : "s"}`);
+        if (c > 0) parts.push(`${c} countr${c === 1 ? "y" : "ies"}`);
+        return parts.join(" · ");
+      }
+      case "audience": {
+        const a = contentCounts.accountCount;
+        const c = contentCounts.contactCount;
+        return `${a} account${a === 1 ? "" : "s"} · ${c} contact${c === 1 ? "" : "s"}`;
+      }
       case "message": {
         const parts: string[] = [];
         if (contentCounts.emailTemplateCount > 0) parts.push(`${contentCounts.emailTemplateCount} email${contentCounts.emailTemplateCount > 1 ? "s" : ""}`);
@@ -185,16 +215,9 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
   const allOpen = Object.values(openSections).every(Boolean);
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-end">
-        <Button variant="ghost" size="sm" className="text-[11px] gap-1 h-6" onClick={toggleAll}>
-          <ChevronsUpDown className="h-3 w-3" />
-          {allOpen ? "Collapse all" : "Expand all"}
-        </Button>
-      </div>
-
+    <div className="space-y-1.5">
       <div className="border rounded-lg divide-y bg-card">
-        {sections.map((section) => {
+        {sections.map((section, sectionIndex) => {
           const isOpen = openSections[section.key];
           return (
             <Collapsible key={section.key} open={isOpen} onOpenChange={() => toggleSection(section.key)}>
@@ -222,8 +245,8 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
                       <span className={sectionStyles[section.key].icon}>{sectionIcons[section.key]}</span>
                       <span className={`text-[15px] font-semibold ${section.done ? "text-muted-foreground" : ""}`}>{section.label}</span>
                     </div>
-                    <div className="flex justify-center min-w-0">
-                      {!isOpen && (() => {
+                    <div className="flex justify-start min-w-0">
+                      {(() => {
                         const summary = getContentSummary(section.key);
                         return summary ? (
                           <span className="text-[13px] text-muted-foreground truncate">{summary}</span>
@@ -231,18 +254,45 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
                       })()}
                     </div>
                     <div className="flex items-center justify-end gap-1 shrink-0">
+                      {sectionIndex === 0 && (
+                        <TooltipProvider delayDuration={200}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6"
+                                onClick={(e) => { e.stopPropagation(); toggleAll(); }}
+                                aria-label={allOpen ? "Collapse all" : "Expand all"}
+                              >
+                                <ChevronsUpDown className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent className="text-xs">{allOpen ? "Collapse all" : "Expand all"}</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
                       <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
                     </div>
                   </div>
                 </div>
               </CollapsibleTrigger>
               <CollapsibleContent className="data-[state=open]:animate-accordion-down data-[state=closed]:animate-accordion-up overflow-hidden">
-                <div className="pt-1 pb-3 px-3 space-y-3">
+                <div className="pt-1.5 pb-2 px-3 space-y-2">
                   {(() => {
                     const hint = validateSection(section.key);
                     if (!section.done && hint) {
+                      // Suppress the redundant "add at least 1 account/contact" hint —
+                      // the audience empty state already communicates this directly.
+                      if (
+                        section.key === "audience" &&
+                        (contentCounts?.accountCount ?? 0) === 0 &&
+                        (contentCounts?.contactCount ?? 0) === 0
+                      ) {
+                        return null;
+                      }
                       return (
-                        <div className={`text-[12px] rounded-md px-3 py-2 ${sectionStyles[section.key].header} ${sectionStyles[section.key].icon}`}>
+                        <div className="text-[12px] rounded-md px-3 py-1.5 bg-muted/50 text-muted-foreground">
                           {hint}
                         </div>
                       );
@@ -254,9 +304,6 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
                     <CampaignAudience
                       campaign={campaign}
                       selectedRegions={selectedRegions}
-                      campaignName={campaignName}
-                      campaignOwner={campaignOwner}
-                      endDate={endDate}
                       isCampaignEnded={isCampaignEnded}
                       focusMode={audienceView}
                     />
@@ -267,6 +314,7 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
                       campaign={campaign}
                       selectedRegions={selectedRegions}
                       audienceCounts={{ accounts: contentCounts?.accountCount ?? 0, contacts: contentCounts?.contactCount ?? 0 }}
+                      isReadOnly={isReadOnly}
                     />
                   )}
                   {section.key === "timing" && (
@@ -278,37 +326,12 @@ export function CampaignStrategy({ campaignId, campaign, isStrategyComplete, upd
                       onSaveTimingNotes={handleSaveTimingNotes}
                     />
                   )}
-                  {/* Footer "Mark as Done" — bigger affordance than the tiny header circle. */}
-                  <div className="pt-2 border-t flex justify-end">
-                    {section.done ? (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleUnmark(section.flag, section.label)}
-                        className="text-xs gap-1.5"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-                        Marked done — click to unmark
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        onClick={() => handleMarkDone(section.flag, section.label, section.key)}
-                        className="text-xs gap-1.5"
-                      >
-                        <Circle className="h-3.5 w-3.5" />
-                        Mark {section.label} as Done
-                      </Button>
-                    )}
-                  </div>
                 </div>
               </CollapsibleContent>
             </Collapsible>
           );
         })}
       </div>
-
-      <FollowUpRulesPanel campaignId={campaignId} />
     </div>
   );
 }

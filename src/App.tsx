@@ -14,13 +14,13 @@ import { AppErrorBoundary } from "@/components/AppErrorBoundary";
 // Eager: most-common landing pages
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
+import CampaignDetail from "./pages/CampaignDetail";
 
 // Lazy: everything else (huge code-split win)
 const Accounts = lazy(() => import("./pages/Accounts"));
 const Contacts = lazy(() => import("./pages/Contacts"));
 const DealsPage = lazy(() => import("./pages/DealsPage"));
 const Campaigns = lazy(() => import("./pages/Campaigns"));
-const CampaignDetail = lazy(() => import("./pages/CampaignDetail"));
 const ActionItems = lazy(() => import("./pages/ActionItems"));
 const Settings = lazy(() => import("./pages/Settings"));
 const NotFound = lazy(() => import("./pages/NotFound"));
@@ -77,6 +77,29 @@ const AppCrashedFallback = ({ onRetry }: { onRetry: () => void }) => {
         <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
           <Button onClick={onRetry}>Retry preview</Button>
           <Button variant="outline" onClick={() => navigate("/auth", { replace: true })}>Go to sign in</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const GlobalAppCrashedFallback = ({ onRetry }: { onRetry: () => void }) => {
+  const handleReload = () => window.location.reload();
+  const handleGoToAuth = () => window.location.assign("/auth");
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background px-6">
+      <div className="w-full max-w-md rounded-lg border bg-card p-6 shadow-sm">
+        <div className="space-y-2 text-center">
+          <h1 className="text-xl font-semibold text-foreground">Something went wrong</h1>
+          <p className="text-sm text-muted-foreground">
+            The app hit a runtime error before the page could finish rendering.
+          </p>
+        </div>
+        <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center">
+          <Button onClick={onRetry}>Retry render</Button>
+          <Button variant="outline" onClick={handleReload}>Reload app</Button>
+          <Button variant="ghost" onClick={handleGoToAuth}>Go to sign in</Button>
         </div>
       </div>
     </div>
@@ -197,13 +220,15 @@ const AppRouter = () => (
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
-    <SecurityEnhancedApp>
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
-        <AppRouter />
-      </TooltipProvider>
-    </SecurityEnhancedApp>
+    <AppErrorBoundary fallback={(reset) => <GlobalAppCrashedFallback onRetry={reset} />}>
+      <SecurityEnhancedApp>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <AppRouter />
+        </TooltipProvider>
+      </SecurityEnhancedApp>
+    </AppErrorBoundary>
   </QueryClientProvider>
 );
 

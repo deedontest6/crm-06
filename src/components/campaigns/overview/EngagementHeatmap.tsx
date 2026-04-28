@@ -4,6 +4,8 @@ import { Activity } from "lucide-react";
 
 interface Props {
   communications: any[];
+  /** Channels enabled for the campaign — disabled ones don't contribute. */
+  enabledChannels?: Array<"Email" | "Phone" | "LinkedIn">;
   onCellClick?: (weekday: number, hourFrom: number, hourTo: number) => void;
 }
 
@@ -18,20 +20,30 @@ const BUCKETS = [
   { label: "20-24", from: 20, to: 24 },
 ];
 
-export function EngagementHeatmap({ communications, onCellClick }: Props) {
+export function EngagementHeatmap({ communications, enabledChannels, onCellClick }: Props) {
+  const showEmail = !enabledChannels || enabledChannels.includes("Email");
+  const showCall = !enabledChannels || enabledChannels.includes("Phone");
+  const showLinkedIn = !enabledChannels || enabledChannels.includes("LinkedIn");
+
   const grid = useMemo(() => {
-    // 7 days x 6 buckets
+    // 7 days x 6 buckets — replies + positive call/LinkedIn outcomes only.
+    // Excludes pixel opens (often inflated by bots) so the "best time" isn't biased.
+    // Also excludes contributions from disabled channels.
     const cells: number[][] = Array.from({ length: 7 }, () =>
       Array(6).fill(0)
     );
     communications.forEach((c: any) => {
-      // Engagement = reply or open
-      const isEngagement =
-        c.sent_via === "graph-sync" ||
-        c.email_status === "Replied" ||
-        !!c.opened_at;
-      if (!isEngagement) return;
-      const dStr = c.opened_at || c.communication_date;
+      const isReply =
+        showEmail && (c.sent_via === "graph-sync" || c.email_status === "Replied");
+      const isPositiveCall =
+        showCall &&
+        (c.communication_type === "Call" || c.communication_type === "Phone") &&
+        c.call_outcome === "Interested";
+      const isPositiveLi =
+        showLinkedIn &&
+        c.communication_type === "LinkedIn" && c.linkedin_status === "Responded";
+      if (!isReply && !isPositiveCall && !isPositiveLi) return;
+      const dStr = c.communication_date;
       if (!dStr) return;
       const d = new Date(dStr);
       const day = d.getDay();
@@ -40,7 +52,7 @@ export function EngagementHeatmap({ communications, onCellClick }: Props) {
       if (bucket >= 0) cells[day][bucket]++;
     });
     return cells;
-  }, [communications]);
+  }, [communications, showEmail, showCall, showLinkedIn]);
 
   const max = Math.max(...grid.flat(), 1);
   const intensity = (v: number) => {
@@ -60,10 +72,10 @@ export function EngagementHeatmap({ communications, onCellClick }: Props) {
         <div className="flex items-center gap-2 mb-2">
           <Activity className="h-3.5 w-3.5 text-muted-foreground" />
           <h3 className="text-xs font-semibold uppercase tracking-wider">
-            Engagement Heatmap
+            Reply Heatmap
           </h3>
           <span className="ml-auto text-[10px] text-muted-foreground">
-            {totalEngagements} engagements
+            {totalEngagements} {totalEngagements === 1 ? "reply" : "replies"}
           </span>
         </div>
         {totalEngagements === 0 ? (
@@ -104,7 +116,7 @@ export function EngagementHeatmap({ communications, onCellClick }: Props) {
               </div>
             ))}
             <p className="text-[9px] text-muted-foreground mt-1">
-              Best send time = densest cell
+              Densest cell = best follow-up window
             </p>
           </div>
         )}

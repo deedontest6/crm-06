@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { Channel } from "./channelVisibility";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,14 +12,14 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
-import { ScrollArea } from "@/components/ui/scroll-area";
 
-type AiKind = "email" | "linkedin-connection" | "phone";
+type AiKind = "email" | "linkedin-connection" | "linkedin-followup" | "phone";
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   campaignId: string;
+  enabledChannels?: Channel[];
   campaignContext: {
     campaign_name: string;
     campaign_type?: string;
@@ -32,15 +33,23 @@ interface Props {
   };
 }
 
+const CHANNEL_TO_KINDS: Record<Channel, AiKind[]> = {
+  Email: ["email"],
+  LinkedIn: ["linkedin-connection", "linkedin-followup"],
+  Phone: ["phone"],
+};
+
 const KIND_OPTIONS: { id: AiKind; label: string; icon: typeof Mail }[] = [
   { id: "email", label: "Email", icon: Mail },
   { id: "linkedin-connection", label: "LinkedIn Connection", icon: Linkedin },
+  { id: "linkedin-followup", label: "LinkedIn Follow-up", icon: Linkedin },
   { id: "phone", label: "Call Script", icon: Phone },
 ];
 
 const KIND_LABEL: Record<AiKind, string> = {
   email: "Email",
   "linkedin-connection": "LinkedIn Connection",
+  "linkedin-followup": "LinkedIn Follow-up",
   phone: "Call Script",
 };
 
@@ -57,14 +66,36 @@ function shortLabel(text: string, max = 30): string {
   return t.length > max ? t.slice(0, max).trim() + "…" : t;
 }
 
-export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignContext }: Props) {
+export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignContext, enabledChannels }: Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
+  const allowedKinds = useMemo(() => {
+    const channels: Channel[] = enabledChannels && enabledChannels.length > 0
+      ? enabledChannels
+      : ["Email", "LinkedIn", "Phone"];
+    const set = new Set<AiKind>();
+    channels.forEach((c) => CHANNEL_TO_KINDS[c]?.forEach((k) => set.add(k)));
+    return set;
+  }, [enabledChannels]);
+
+  const visibleKindOptions = useMemo(
+    () => KIND_OPTIONS.filter((o) => allowedKinds.has(o.id)),
+    [allowedKinds]
+  );
+
+  const buildDefaultSelected = (): Record<AiKind, boolean> => {
+    const base: Record<AiKind, boolean> = {
+      email: false, "linkedin-connection": false, "linkedin-followup": false, phone: false,
+    };
+    if (visibleKindOptions.length === 0) return base;
+    const first = allowedKinds.has("email") ? "email" : visibleKindOptions[0].id;
+    base[first] = true;
+    return base;
+  };
+
   const [step, setStep] = useState<"form" | "preview">("form");
-  const [selected, setSelected] = useState<Record<AiKind, boolean>>({
-    email: true, "linkedin-connection": false, phone: false,
-  });
+  const [selected, setSelected] = useState<Record<AiKind, boolean>>(buildDefaultSelected);
   const [context, setContext] = useState("");
   const [tone, setTone] = useState("Professional");
   const [length, setLength] = useState("Short");
@@ -72,12 +103,23 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
   const [saving, setSaving] = useState(false);
   const [previews, setPreviews] = useState<PreviewItem[]>([]);
 
-  const toggle = (k: AiKind) => setSelected(prev => ({ ...prev, [k]: !prev[k] }));
-  const anySelected = Object.values(selected).some(Boolean);
+  // Re-sync default selection whenever the dialog opens or channel set changes,
+  // so legacy initial state cannot leak disabled-channel options into the UI.
+  useEffect(() => {
+    if (!open) return;
+    setSelected(buildDefaultSelected());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, allowedKinds]);
+
+  const toggle = (k: AiKind) => {
+    if (!allowedKinds.has(k)) return;
+    setSelected((prev) => ({ ...prev, [k]: !prev[k] }));
+  };
+  const anySelected = (Object.keys(selected) as AiKind[]).some((k) => selected[k] && allowedKinds.has(k));
 
   const reset = () => {
     setStep("form");
-    setSelected({ email: true, "linkedin-connection": false, phone: false });
+    setSelected(buildDefaultSelected());
     setContext("");
     setTone("Professional");
     setLength("Short");
@@ -106,7 +148,7 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
     if (!context.trim()) { toast({ title: "Add a short context to guide the AI", variant: "destructive" }); return; }
 
     setGenerating(true);
-    const kinds = (Object.keys(selected) as AiKind[]).filter(k => selected[k]);
+    const kinds = (Object.keys(selected) as AiKind[]).filter(k => selected[k] && allowedKinds.has(k));
     const items = await runGeneration(kinds);
     setPreviews(items);
     setGenerating(false);
@@ -152,6 +194,14 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
         campaign_id: campaignId,
         created_by: user!.id,
       });
+    } else if (kind === "linkedin-followup") {
+      await supabase.from("campaign_email_templates").insert({
+        template_name: `AI – LinkedIn Follow-up – ${nameSuffix}`,
+        body: result.body || "",
+        email_type: "LinkedIn-Followup",
+        campaign_id: campaignId,
+        created_by: user!.id,
+      });
     } else if (kind === "phone") {
       await supabase.from("campaign_phone_scripts").insert({
         script_name: `AI – Call Script – ${nameSuffix}`,
@@ -187,7 +237,7 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
 
   return (
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
-      <DialogContent className="sm:max-w-[680px] max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-[760px] h-[90vh] max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
@@ -204,19 +254,25 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
           <div className="grid gap-4 py-2">
             <div className="space-y-2">
               <Label className="text-xs">What to create</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {KIND_OPTIONS.map(({ id, label, icon: Icon }) => (
-                  <label
-                    key={id}
-                    className="flex items-center gap-2 px-3 py-2 border rounded-md cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={(e) => { e.preventDefault(); toggle(id); }}
-                  >
-                    <Checkbox checked={selected[id]} onCheckedChange={() => toggle(id)} />
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="text-sm">{label}</span>
-                  </label>
-                ))}
-              </div>
+              {visibleKindOptions.length === 0 ? (
+                <div className="text-xs text-muted-foreground border rounded-md px-3 py-2 bg-muted/30">
+                  No channels are enabled for this campaign. Enable at least one channel in Setup → Strategy to use AI generation.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {visibleKindOptions.map(({ id, label, icon: Icon }) => (
+                    <label
+                      key={id}
+                      className="flex items-center gap-2 px-3 py-2 border rounded-md cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={(e) => { e.preventDefault(); toggle(id); }}
+                    >
+                      <Checkbox checked={selected[id]} onCheckedChange={() => toggle(id)} />
+                      <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-sm">{label}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -259,11 +315,11 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
         )}
 
         {step === "preview" && (
-          <ScrollArea className="flex-1 -mx-2 px-2">
-            <div className="space-y-3 py-2">
+          <div className="flex-1 min-h-0 -mx-2 overflow-y-auto px-2">
+            <div className="flex min-h-full flex-col gap-3 py-2">
               {previews.map((item, idx) => (
-                <div key={idx} className={`border rounded-lg p-3 space-y-2 ${item.include && !item.error ? "border-primary/40 bg-primary/5" : "border-border"}`}>
-                  <div className="flex items-center justify-between">
+                <div key={idx} className={`border rounded-lg p-3 space-y-2 ${previews.length === 1 ? "flex flex-1 flex-col min-h-0" : ""} ${item.include && !item.error ? "border-primary/40 bg-primary/5" : "border-border"}`}>
+                  <div className="flex shrink-0 items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Checkbox checked={item.include && !item.error} disabled={!!item.error} onCheckedChange={() => togglePreviewInclude(idx)} />
                       <span className="text-sm font-medium">{KIND_LABEL[item.kind]}</span>
@@ -275,24 +331,24 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
                   </div>
 
                   {item.result && item.kind === "email" && (
-                    <div className="space-y-2">
+                    <div className={`space-y-2 ${previews.length === 1 ? "flex flex-1 flex-col min-h-0" : ""}`}>
                       <div>
                         <Label className="text-[11px] text-muted-foreground">Subject</Label>
                         <Input value={item.result.subject || ""} onChange={(e) => updatePreview(idx, { subject: e.target.value })} className="h-8 text-sm" />
                       </div>
-                      <div>
+                      <div className={previews.length === 1 ? "flex flex-1 flex-col min-h-0" : undefined}>
                         <Label className="text-[11px] text-muted-foreground">Body</Label>
-                        <Textarea value={item.result.body || ""} onChange={(e) => updatePreview(idx, { body: e.target.value })} rows={6} className="text-sm" />
+                        <Textarea value={item.result.body || ""} onChange={(e) => updatePreview(idx, { body: e.target.value })} rows={14} className={previews.length === 1 ? "flex-1 resize-none text-sm leading-6" : "text-sm leading-6"} />
                       </div>
                     </div>
                   )}
 
-                  {item.result && item.kind === "linkedin-connection" && (
+                  {item.result && (item.kind === "linkedin-connection" || item.kind === "linkedin-followup") && (
                     <div>
                       <Label className="text-[11px] text-muted-foreground">
                         Message ({(item.result.body || "").length} / 300)
                       </Label>
-                      <Textarea value={item.result.body || ""} onChange={(e) => updatePreview(idx, { body: e.target.value })} rows={4} className="text-sm" />
+                      <Textarea value={item.result.body || ""} onChange={(e) => updatePreview(idx, { body: e.target.value })} rows={previews.length === 1 ? 16 : 8} className={previews.length === 1 ? "min-h-[420px] resize-none text-sm leading-6" : "text-sm leading-6"} />
                     </div>
                   )}
 
@@ -312,7 +368,7 @@ export function AIGenerateWizard({ open, onOpenChange, campaignId, campaignConte
                 </div>
               ))}
             </div>
-          </ScrollArea>
+          </div>
         )}
 
         <DialogFooter>

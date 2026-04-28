@@ -44,6 +44,8 @@ interface BuildArgs {
   searchQuery?: string;
   /** When set, only include contacts reachable on this channel. */
   channelFilter?: "all" | "Email" | "LinkedIn" | "Phone";
+  /** When provided, exporters omit columns/rows for channels not in this list. */
+  enabledChannels?: string[];
 }
 
 const yn = (v: boolean) => (v ? "Y" : "N");
@@ -60,7 +62,8 @@ export function buildReachabilityData({
   primaryChannel,
   searchQuery = "",
   channelFilter = "all",
-}: BuildArgs): { rows: ReachabilityRow[]; aggregates: AccountAggregate[] } {
+  enabledChannels,
+}: BuildArgs): { rows: ReachabilityRow[]; aggregates: AccountAggregate[]; enabledChannels: string[] } {
   const q = searchQuery.trim();
   const accountMap = new Map<string, any>();
   for (const ca of campaignAccounts) accountMap.set(ca.account_id, ca.accounts || {});
@@ -122,7 +125,15 @@ export function buildReachabilityData({
   }
   const aggregates = Array.from(aggMap.values()).sort((a, b) => a.account.localeCompare(b.account));
 
-  return { rows: rows.sort((a, b) => a.account.localeCompare(b.account) || a.contact.localeCompare(b.contact)), aggregates };
+  const norm = (v: string) => (v === "Call" ? "Phone" : v);
+  const channels = (enabledChannels && enabledChannels.length > 0)
+    ? Array.from(new Set(enabledChannels.map(norm))).filter((c) => ["Email", "Phone", "LinkedIn"].includes(c))
+    : ["Email", "Phone", "LinkedIn"];
+  return {
+    rows: rows.sort((a, b) => a.account.localeCompare(b.account) || a.contact.localeCompare(b.contact)),
+    aggregates,
+    enabledChannels: channels,
+  };
 }
 
 function safeFilename(name: string) {
@@ -146,41 +157,45 @@ function downloadBlob(content: string | Blob, filename: string, mime = "text/pla
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const ROW_HEADERS = [
-  "Account",
-  "Contact",
-  "Email",
-  "Phone",
-  "LinkedIn",
-  "Reachable on Email",
-  "Reachable on LinkedIn",
-  "Reachable on Phone",
-  "Primary Channel Match",
-  "Stage",
-  "LinkedIn Status",
-  "Why Unreachable",
-];
+function buildHeaders(enabled: string[]) {
+  const h: string[] = ["Account", "Contact"];
+  if (enabled.includes("Email")) h.push("Email", "Reachable on Email");
+  if (enabled.includes("Phone")) h.push("Phone", "Reachable on Phone");
+  if (enabled.includes("LinkedIn")) h.push("LinkedIn", "Reachable on LinkedIn", "LinkedIn Status");
+  h.push("Primary Channel Match", "Stage", "Why Unreachable");
+  return h;
+}
 
-function rowsToCSVBlock(rows: ReachabilityRow[], emptyLabel = "(no rows in scope)") {
+function rowsToCSVBlock(rows: ReachabilityRow[], enabled: string[], emptyLabel = "(no rows in scope)") {
+  const headers = buildHeaders(enabled);
   if (rows.length === 0) {
-    return `${ROW_HEADERS.join(",")}\n${CSVParser.escapeCSVField(emptyLabel)}\n`;
+    return `${headers.join(",")}\n${CSVParser.escapeCSVField(emptyLabel)}\n`;
   }
   return CSVParser.toCSV(
-    rows.map((r) => ({
-      Account: r.account,
-      Contact: r.contact,
-      Email: r.email,
-      Phone: r.phone,
-      LinkedIn: r.linkedin,
-      "Reachable on Email": yn(r.emailReachable),
-      "Reachable on LinkedIn": yn(r.linkedInReachable),
-      "Reachable on Phone": yn(r.phoneReachable),
-      "Primary Channel Match": yn(r.primaryMatch),
-      Stage: r.stage,
-      "LinkedIn Status": r.linkedinStatus,
-      "Why Unreachable": r.whyUnreachable,
-    })),
-    ROW_HEADERS,
+    rows.map((r) => {
+      const o: Record<string, string> = {
+        Account: r.account,
+        Contact: r.contact,
+      };
+      if (enabled.includes("Email")) {
+        o.Email = r.email;
+        o["Reachable on Email"] = yn(r.emailReachable);
+      }
+      if (enabled.includes("Phone")) {
+        o.Phone = r.phone;
+        o["Reachable on Phone"] = yn(r.phoneReachable);
+      }
+      if (enabled.includes("LinkedIn")) {
+        o.LinkedIn = r.linkedin;
+        o["Reachable on LinkedIn"] = yn(r.linkedInReachable);
+        o["LinkedIn Status"] = r.linkedinStatus;
+      }
+      o["Primary Channel Match"] = yn(r.primaryMatch);
+      o.Stage = r.stage;
+      o["Why Unreachable"] = r.whyUnreachable;
+      return o;
+    }),
+    headers,
   );
 }
 
@@ -192,7 +207,7 @@ export function exportReachabilityCSV(opts: {
   filteredView?: boolean;
 }) {
   const { campaignName, primaryChannel, data, filteredView } = opts;
-  const { rows, aggregates } = data;
+  const { rows, aggregates, enabledChannels } = data;
 
   const aggHeaders = ["Account", "# Contacts", "# Emailable", "# LinkedIn", "# Callable"];
   const aggBlock = CSVParser.toCSV(
@@ -206,10 +221,10 @@ export function exportReachabilityCSV(opts: {
     aggHeaders,
   );
 
-  const allBlock = rowsToCSVBlock(rows);
-  const emailBlock = rowsToCSVBlock(rows.filter((r) => r.emailReachable));
-  const linkedinBlock = rowsToCSVBlock(rows.filter((r) => r.linkedInReachable));
-  const phoneBlock = rowsToCSVBlock(rows.filter((r) => r.phoneReachable));
+  const allBlock = rowsToCSVBlock(rows, enabledChannels);
+  const emailBlock = enabledChannels.includes("Email") ? rowsToCSVBlock(rows.filter((r) => r.emailReachable), enabledChannels) : "";
+  const linkedinBlock = enabledChannels.includes("LinkedIn") ? rowsToCSVBlock(rows.filter((r) => r.linkedInReachable), enabledChannels) : "";
+  const phoneBlock = enabledChannels.includes("Phone") ? rowsToCSVBlock(rows.filter((r) => r.phoneReachable), enabledChannels) : "";
 
   const meta =
     `Campaign,${CSVParser.escapeCSVField(campaignName)}\n` +
@@ -217,12 +232,10 @@ export function exportReachabilityCSV(opts: {
     `Scope,${CSVParser.escapeCSVField(filteredView ? "Filtered view" : "All")}\n` +
     `Generated,${CSVParser.escapeCSVField(format(new Date(), "yyyy-MM-dd HH:mm"))}\n`;
 
-  const csv =
-    `${meta}\n# Account aggregates\n${aggBlock}\n\n` +
-    `# All contacts (${rows.length})\n${allBlock}\n\n` +
-    `# Email-reachable only (${rows.filter((r) => r.emailReachable).length})\n${emailBlock}\n\n` +
-    `# LinkedIn-reachable only (${rows.filter((r) => r.linkedInReachable).length})\n${linkedinBlock}\n\n` +
-    `# Phone-reachable only (${rows.filter((r) => r.phoneReachable).length})\n${phoneBlock}\n`;
+  let csv = `${meta}\n# Account aggregates\n${aggBlock}\n\n# All contacts (${rows.length})\n${allBlock}\n`;
+  if (emailBlock) csv += `\n# Email-reachable only (${rows.filter((r) => r.emailReachable).length})\n${emailBlock}\n`;
+  if (linkedinBlock) csv += `\n# LinkedIn-reachable only (${rows.filter((r) => r.linkedInReachable).length})\n${linkedinBlock}\n`;
+  if (phoneBlock) csv += `\n# Phone-reachable only (${rows.filter((r) => r.phoneReachable).length})\n${phoneBlock}\n`;
 
   downloadBlob(
     csv,
@@ -242,7 +255,7 @@ export async function exportReachabilityPDF(opts: {
     import("jspdf-autotable"),
   ]);
   const { campaignName, primaryChannel, data, filteredView } = opts;
-  const { rows, aggregates } = data;
+  const { rows, aggregates, enabledChannels } = data;
 
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const generatedAt = format(new Date(), "yyyy-MM-dd HH:mm");
@@ -258,17 +271,21 @@ export async function exportReachabilityPDF(opts: {
   doc.text(`Generated: ${generatedAt}`, 40, 100);
   doc.setTextColor(0);
 
-  // Aggregates table
+  // Aggregates table — drop columns for disabled channels.
+  const aggHead: string[] = ["Account", "# Contacts"];
+  if (enabledChannels.includes("Email")) aggHead.push("# Emailable");
+  if (enabledChannels.includes("LinkedIn")) aggHead.push("# LinkedIn");
+  if (enabledChannels.includes("Phone")) aggHead.push("# Callable");
   autoTable(doc, {
     startY: 119,
-    head: [["Account", "# Contacts", "# Emailable", "# LinkedIn", "# Callable"]],
-    body: aggregates.map((a) => [
-      a.account,
-      String(a.contacts),
-      String(a.emailable),
-      String(a.linkedin),
-      String(a.callable),
-    ]),
+    head: [aggHead],
+    body: aggregates.map((a) => {
+      const row: string[] = [a.account, String(a.contacts)];
+      if (enabledChannels.includes("Email")) row.push(String(a.emailable));
+      if (enabledChannels.includes("LinkedIn")) row.push(String(a.linkedin));
+      if (enabledChannels.includes("Phone")) row.push(String(a.callable));
+      return row;
+    }),
     styles: { fontSize: 9, cellPadding: 4 },
     headStyles: { fillColor: [60, 60, 60] },
     margin: { left: 40, right: 40 },
@@ -286,43 +303,39 @@ export async function exportReachabilityPDF(opts: {
 
   const afterAggY = (doc as any).lastAutoTable?.finalY || 200;
 
-  // Per-contact reachability
+  // Per-contact reachability — drop columns for disabled channels.
+  const head: string[] = ["Account", "Contact"];
+  const dotIdx: number[] = [];
+  if (enabledChannels.includes("Email")) { head.push("Email"); head.push("✉"); dotIdx.push(head.length - 1); }
+  if (enabledChannels.includes("Phone")) { head.push("Phone"); head.push("📞"); dotIdx.push(head.length - 1); }
+  if (enabledChannels.includes("LinkedIn")) { head.push("LinkedIn?"); head.push("in"); dotIdx.push(head.length - 1); }
+  const primaryIdx = head.length;
+  head.push("Primary", "Stage", "Why Unreachable");
   autoTable(doc, {
     startY: afterAggY + 24,
-    head: [["Account", "Contact", "Email", "Phone", "LinkedIn?", "✉", "in", "📞", "Primary", "Stage", "Why Unreachable"]],
-    body: rows.map((r) => [
-      r.account,
-      r.contact,
-      r.email || "—",
-      r.phone || "—",
-      r.linkedin ? "Yes" : "—",
-      r.emailReachable ? "●" : "○",
-      r.linkedInReachable ? "●" : "○",
-      r.phoneReachable ? "●" : "○",
-      r.primaryMatch ? "✓" : "—",
-      r.stage,
-      r.whyUnreachable,
-    ]),
+    head: [head],
+    body: rows.map((r) => {
+      const row: (string)[] = [r.account, r.contact];
+      if (enabledChannels.includes("Email")) { row.push(r.email || "—"); row.push(r.emailReachable ? "●" : "○"); }
+      if (enabledChannels.includes("Phone")) { row.push(r.phone || "—"); row.push(r.phoneReachable ? "●" : "○"); }
+      if (enabledChannels.includes("LinkedIn")) { row.push(r.linkedin ? "Yes" : "—"); row.push(r.linkedInReachable ? "●" : "○"); }
+      row.push(r.primaryMatch ? "✓" : "—", r.stage, r.whyUnreachable);
+      return row;
+    }),
     styles: { fontSize: 8, cellPadding: 3 },
     headStyles: { fillColor: [60, 60, 60] },
-    columnStyles: {
-      5: { halign: "center", cellWidth: 24 },
-      6: { halign: "center", cellWidth: 24 },
-      7: { halign: "center", cellWidth: 24 },
-      8: { halign: "center", cellWidth: 50 },
-    },
     margin: { left: 40, right: 40 },
-    didParseCell: (data) => {
-      if (data.section !== "body") return;
-      // color the reachability dots
-      if ([5, 6, 7].includes(data.column.index)) {
-        const reachable = data.cell.raw === "●";
-        data.cell.styles.textColor = reachable ? [16, 185, 129] : [200, 200, 200];
-        data.cell.styles.fontStyle = "bold";
+    didParseCell: (cellData) => {
+      if (cellData.section !== "body") return;
+      if (dotIdx.includes(cellData.column.index)) {
+        const reachable = cellData.cell.raw === "●";
+        cellData.cell.styles.textColor = reachable ? [16, 185, 129] : [200, 200, 200];
+        cellData.cell.styles.fontStyle = "bold";
+        cellData.cell.styles.halign = "center";
       }
-      if (data.column.index === 8 && data.cell.raw === "✓") {
-        data.cell.styles.textColor = [16, 185, 129];
-        data.cell.styles.fontStyle = "bold";
+      if (cellData.column.index === primaryIdx && cellData.cell.raw === "✓") {
+        cellData.cell.styles.textColor = [16, 185, 129];
+        cellData.cell.styles.fontStyle = "bold";
       }
     },
   });

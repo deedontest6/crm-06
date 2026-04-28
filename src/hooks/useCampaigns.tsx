@@ -29,9 +29,10 @@ export interface CampaignFormData {
 }
 
 // Lightweight columns needed for the campaigns list / dashboard.
-// Avoid `select(*)` so we don't pull large text columns (notes, description, message_strategy, region JSON, etc.).
+// Avoid `select(*)` so we don't pull large text columns (notes, description, message_strategy, etc.).
+// D5: dropped `region` (large JSON blob, only needed in detail view). `goal` is kept because the list-page search filters on it.
 const LIST_COLUMNS =
-  "id,campaign_name,campaign_type,status,priority,primary_channel,owner,start_date,end_date,tags,mart_complete,archived_at,created_at,region,goal,slug";
+  "id,campaign_name,campaign_type,status,priority,primary_channel,owner,start_date,end_date,tags,mart_complete,archived_at,created_at,goal,slug";
 
 export interface UseCampaignsOptions {
   /** Set to false on detail pages so we don't fetch the full campaigns list as collateral. */
@@ -105,16 +106,31 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
         } as any);
       if (error) throw error;
 
-      // Auto-create campaign_mart row (Strategy progress tracking)
+      // Auto-create campaign_mart row (Strategy progress tracking).
+      // Upsert so a DB trigger that auto-creates this row won't cause a conflict.
       const { error: strategyError } = await supabase
         .from("campaign_mart")
-        .insert({ campaign_id: newId });
+        .upsert({ campaign_id: newId }, { onConflict: "campaign_id" });
       if (strategyError) console.error("Failed to create strategy row:", strategyError);
 
-      return { id: newId };
+      // Read back the row with the trigger-generated columns (slug, created_at)
+      // so we can surgically prepend it to the cached list (B6 — no full refetch).
+      const { data: newRow } = await supabase
+        .from("campaigns")
+        .select(LIST_COLUMNS)
+        .eq("id", newId)
+        .maybeSingle();
+      return { id: newId, row: newRow as Campaign | null };
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+    onSuccess: ({ row }) => {
+      // B6: surgical insert into the active campaigns list.
+      if (row) {
+        queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+          prev ? [row, ...prev.filter((c) => c.id !== row.id)] : prev,
+        );
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      }
       queryClient.invalidateQueries({ queryKey: ["campaign-mart-all"] });
       toast({ title: "Campaign created successfully" });
     },
@@ -125,9 +141,33 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
 
   const updateCampaign = useMutation({
     mutationFn: async ({ id, ...updates }: Partial<CampaignFormData> & { id: string }) => {
+      // Status changes must go through transition_campaign_status RPC (lifecycle guard).
+      // If a caller passes `status` here, route it via the RPC and strip it from the
+      // direct update — the trigger on `campaigns` will reject any direct status write.
+      const { status: nextStatus, ...rest } = updates as any;
+
+      if (nextStatus !== undefined) {
+        const { data: existing } = await supabase
+          .from("campaigns").select("status").eq("id", id).maybeSingle();
+        if (existing?.status !== nextStatus) {
+          const { error: rpcError } = await supabase.rpc("transition_campaign_status", {
+            _campaign_id: id, _new_status: nextStatus, _reason: "user-update",
+          });
+          if (rpcError) throw rpcError;
+        }
+      }
+
+      const hasOtherUpdates = Object.keys(rest).length > 0;
+      if (!hasOtherUpdates) {
+        const { data, error } = await supabase
+          .from("campaigns").select().eq("id", id).single();
+        if (error) throw error;
+        return data;
+      }
+
       const { data, error } = await supabase
         .from("campaigns")
-        .update({ ...updates, modified_by: user!.id, modified_at: new Date().toISOString() })
+        .update({ ...rest, modified_by: user!.id, modified_at: new Date().toISOString() })
         .eq("id", id)
         .select()
         .single();
@@ -135,14 +175,60 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
       return data;
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
-      queryClient.invalidateQueries({ queryKey: ["campaign", data.id] });
+      // B6: surgically patch the row in cache instead of refetching the whole list.
+      queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+        prev ? prev.map((c) => (c.id === data.id ? { ...c, ...data } : c)) : prev,
+      );
+      queryClient.setQueryData<Campaign[]>(["archived-campaigns"], (prev) =>
+        prev ? prev.map((c) => (c.id === data.id ? { ...c, ...data } : c)) : prev,
+      );
+      queryClient.setQueryData(["campaign", data.id], data);
       queryClient.invalidateQueries({ queryKey: ["campaign-primary-channel", data.id] });
       queryClient.invalidateQueries({ queryKey: ["campaign-meta-table", data.id] });
       toast({ title: "Campaign updated successfully" });
     },
     onError: (error: Error) => {
       toast({ title: "Error updating campaign", description: error.message, variant: "destructive" });
+    },
+  });
+
+  // Dedicated, explicit lifecycle transition. Prefer this from UI dropdowns.
+  const transitionStatus = useMutation({
+    mutationFn: async ({ id, status, reason }: { id: string; status: string; reason?: string }) => {
+      const { data, error } = await supabase.rpc("transition_campaign_status", {
+        _campaign_id: id, _new_status: status, _reason: reason ?? null,
+      });
+      if (error) throw error;
+      return data;
+    },
+    // B6: optimistic UI — flip the chip instantly so the user sees feedback,
+    // then roll back if the RPC rejects the transition.
+    onMutate: async (vars) => {
+      await queryClient.cancelQueries({ queryKey: ["campaigns"] });
+      await queryClient.cancelQueries({ queryKey: ["campaign", vars.id] });
+      const prevList = queryClient.getQueryData<Campaign[]>(["campaigns"]);
+      const prevDetail = queryClient.getQueryData<Campaign>(["campaign", vars.id]);
+      queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+        prev ? prev.map((c) => (c.id === vars.id ? { ...c, status: vars.status } : c)) : prev,
+      );
+      queryClient.setQueryData<Campaign | undefined>(["campaign", vars.id], (prev) =>
+        prev ? { ...prev, status: vars.status } : prev,
+      );
+      return { prevList, prevDetail };
+    },
+    onSuccess: (_d, vars) => {
+      // B6: surgical update — patch the row in cache instead of refetching the whole list.
+      queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+        prev ? prev.map((c) => (c.id === vars.id ? { ...c, status: vars.status } : c)) : prev,
+      );
+      queryClient.invalidateQueries({ queryKey: ["campaign", vars.id] });
+      queryClient.invalidateQueries({ queryKey: ["campaign-events", vars.id] });
+    },
+    onError: (error: Error, vars, context) => {
+      // Roll back the optimistic flip.
+      if (context?.prevList) queryClient.setQueryData(["campaigns"], context.prevList);
+      if (context?.prevDetail) queryClient.setQueryData(["campaign", vars.id], context.prevDetail);
+      toast({ title: "Cannot change status", description: error.message, variant: "destructive" });
     },
   });
 
@@ -155,10 +241,15 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
     },
     onSuccess: (deletedId: string) => {
       logSecurityEvent('DELETE', 'campaigns', deletedId, { operation: 'PERMANENT_DELETE', status: 'Success' });
-      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
-      queryClient.invalidateQueries({ queryKey: ["archived-campaigns"] });
-      queryClient.invalidateQueries({ queryKey: ["campaign-mart-all"] });
+      // B6: surgically remove from caches instead of full refetch.
+      queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+        prev ? prev.filter((c) => c.id !== deletedId) : prev,
+      );
+      queryClient.setQueryData<Campaign[]>(["archived-campaigns"], (prev) =>
+        prev ? prev.filter((c) => c.id !== deletedId) : prev,
+      );
       queryClient.removeQueries({ queryKey: ["campaign", deletedId] });
+      queryClient.invalidateQueries({ queryKey: ["campaign-mart-all"] });
       toast({ title: "Campaign deleted" });
     },
     onError: (error: Error) => {
@@ -174,12 +265,18 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
       return (data || []) as string[];
     },
     onSuccess: (deletedIds: string[], requestedIds) => {
+      const deletedSet = new Set(deletedIds);
       deletedIds.forEach((id) => {
         logSecurityEvent('DELETE', 'campaigns', id, { operation: 'PERMANENT_DELETE_BULK', status: 'Success' });
         queryClient.removeQueries({ queryKey: ["campaign", id] });
       });
-      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
-      queryClient.invalidateQueries({ queryKey: ["archived-campaigns"] });
+      // B6: surgically prune caches.
+      queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+        prev ? prev.filter((c) => !deletedSet.has(c.id)) : prev,
+      );
+      queryClient.setQueryData<Campaign[]>(["archived-campaigns"], (prev) =>
+        prev ? prev.filter((c) => !deletedSet.has(c.id)) : prev,
+      );
       queryClient.invalidateQueries({ queryKey: ["campaign-mart-all"] });
 
       const requested = requestedIds.length;
@@ -201,17 +298,65 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
 
   const archiveCampaign = useMutation({
     mutationFn: async (id: string) => {
+      // Pause Active/Paused campaigns on archive so background runners
+      // (campaign-follow-up-runner, ab-winner-evaluator, etc.) stop touching them.
+      // Drafts and Completed campaigns keep their status.
+      const { data: existing } = await supabase
+        .from("campaigns")
+        .select("status")
+        .eq("id", id)
+        .maybeSingle();
+      // If currently Active, transition to Paused via the lifecycle RPC FIRST
+      // so the audit log records it and the status guard does not block the archive update.
+      if (existing?.status === "Active") {
+        const { error: tErr } = await supabase.rpc("transition_campaign_status", {
+          _campaign_id: id, _new_status: "Paused", _reason: "auto-pause on archive",
+        });
+        if (tErr) throw tErr;
+      }
       const { error } = await supabase
         .from("campaigns")
-        .update({ archived_at: new Date().toISOString(), archived_by: user!.id })
+        .update({
+          archived_at: new Date().toISOString(),
+          archived_by: user!.id,
+        })
         .eq("id", id);
       if (error) throw error;
+
+      // Also disable follow-up rules so any in-flight cron cycle between
+      // archive and the next runner tick does NOT keep sending follow-ups.
+      // The runner already skips Paused campaigns, but the rules table is
+      // the second-line defence in case a runner reads stale campaign rows.
+      // We do not snapshot prior is_enabled state — restore leaves rules
+      // disabled and the user re-enables intentionally on the detail page.
+      await supabase
+        .from("campaign_follow_up_rules")
+        .update({ is_enabled: false })
+        .eq("campaign_id", id);
     },
     onSuccess: (_: any, id: string) => {
       logSecurityEvent('ARCHIVE', 'campaigns', id, { operation: 'ARCHIVE', status: 'Success' });
-      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
-      queryClient.invalidateQueries({ queryKey: ["archived-campaigns"] });
-      toast({ title: "Campaign archived" });
+      // B6: move row from active list → archived list without refetching either.
+      let movedRow: Campaign | undefined;
+      queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) => {
+        if (!prev) return prev;
+        movedRow = prev.find((c) => c.id === id);
+        return prev.filter((c) => c.id !== id);
+      });
+      if (movedRow) {
+        const archivedRow = { ...movedRow, archived_at: new Date().toISOString() } as Campaign;
+        queryClient.setQueryData<Campaign[]>(["archived-campaigns"], (prev) =>
+          prev ? [archivedRow, ...prev.filter((c) => c.id !== id)] : prev,
+        );
+        queryClient.setQueryData(["campaign", id], (prev: Campaign | undefined) =>
+          prev ? { ...prev, archived_at: archivedRow.archived_at } : prev,
+        );
+      } else {
+        // Fallback if list not yet loaded (e.g., archived from detail page).
+        queryClient.invalidateQueries({ queryKey: ["archived-campaigns"] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["follow-up-rules", id] });
+      toast({ title: "Campaign archived", description: "Follow-up rules disabled. Re-enable them after restore if needed." });
     },
     onError: (error: Error) => {
       toast({ title: "Error archiving campaign", description: error.message, variant: "destructive" });
@@ -228,8 +373,24 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
     },
     onSuccess: (_: any, id: string) => {
       logSecurityEvent('RESTORE', 'campaigns', id, { operation: 'RESTORE', status: 'Success' });
-      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
-      queryClient.invalidateQueries({ queryKey: ["archived-campaigns"] });
+      // B6: move row from archived list → active list surgically.
+      let movedRow: Campaign | undefined;
+      queryClient.setQueryData<Campaign[]>(["archived-campaigns"], (prev) => {
+        if (!prev) return prev;
+        movedRow = prev.find((c) => c.id === id);
+        return prev.filter((c) => c.id !== id);
+      });
+      if (movedRow) {
+        const restoredRow = { ...movedRow, archived_at: null, archived_by: null } as Campaign;
+        queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+          prev ? [restoredRow, ...prev.filter((c) => c.id !== id)] : prev,
+        );
+        queryClient.setQueryData(["campaign", id], (prev: Campaign | undefined) =>
+          prev ? { ...prev, archived_at: null, archived_by: null } : prev,
+        );
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      }
       toast({ title: "Campaign restored" });
     },
     onError: (error: Error) => {
@@ -285,13 +446,18 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
           mart_complete: false,
           priority: (source as any).priority || "Medium",
           primary_channel: (source as any).primary_channel || null,
+          enabled_channels: (source as any).enabled_channels || ["Email", "Phone", "LinkedIn"],
           tags: (source as any).tags || null,
           created_by: user!.id,
         } as any);
       if (insertErr) throw insertErr;
 
       // 3. Clone Strategy progress (reset all flags)
-      await supabase.from("campaign_mart").insert({ campaign_id: newId });
+      // Use upsert so we don't conflict with a DB trigger that may have already
+      // auto-created the campaign_mart row when the campaign was inserted above.
+      await supabase
+        .from("campaign_mart")
+        .upsert({ campaign_id: newId }, { onConflict: "campaign_id" });
 
       // 4. Clone email templates
       const { data: templates } = await supabase
@@ -366,16 +532,158 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
         );
       }
 
-      // Re-read the slug after the DB trigger generated it.
+      // 8. Clone marketing materials (file references — same storage paths,
+      // since we don't deep-copy the underlying files in storage).
+      const { data: matRows } = await supabase
+        .from("campaign_materials")
+        .select("*")
+        .eq("campaign_id", sourceId);
+      if (matRows?.length) {
+        await supabase.from("campaign_materials").insert(
+          matRows.map((m) => ({
+            campaign_id: newId,
+            file_name: m.file_name,
+            file_path: m.file_path,
+            file_type: m.file_type,
+            created_by: user!.id,
+          }))
+        );
+      }
+
+      // 9. Clone audience segments (filter definitions only — segment
+      // membership is recomputed at send time from the cloned contacts).
+      const { data: segments } = await supabase
+        .from("campaign_audience_segments")
+        .select("segment_name, filters")
+        .eq("campaign_id", sourceId);
+      if (segments?.length) {
+        await supabase.from("campaign_audience_segments").insert(
+          segments.map((s) => ({
+            campaign_id: newId,
+            segment_name: s.segment_name,
+            filters: s.filters,
+            created_by: user!.id,
+          }))
+        );
+      }
+
+      // 10. Clone multi-touch sequences (template references stay valid because
+      // we already cloned templates in step 4 — but step 4 produced NEW
+      // template ids, so we need a name-keyed map to translate).
+      const { data: srcTemplates } = await supabase
+        .from("campaign_email_templates")
+        .select("id, template_name, subject")
+        .eq("campaign_id", sourceId);
+      const { data: clonedTemplates } = await supabase
+        .from("campaign_email_templates")
+        .select("id, template_name, subject")
+        .eq("campaign_id", newId);
+      const templateIdMap = new Map<string, string>();
+      if (srcTemplates && clonedTemplates) {
+        for (const src of srcTemplates) {
+          const match = clonedTemplates.find(
+            (t) => t.template_name === src.template_name && t.subject === src.subject,
+          );
+          if (match) templateIdMap.set(src.id, match.id);
+        }
+      }
+
+      const { data: sequences } = await supabase
+        .from("campaign_sequences")
+        .select("step_number, template_id, wait_business_days, condition, target_segment_id")
+        .eq("campaign_id", sourceId);
+      if (sequences?.length) {
+        await supabase.from("campaign_sequences").insert(
+          sequences.map((seq) => ({
+            campaign_id: newId,
+            step_number: seq.step_number,
+            template_id: seq.template_id ? templateIdMap.get(seq.template_id) ?? null : null,
+            wait_business_days: seq.wait_business_days,
+            condition: seq.condition,
+            target_segment_id: null, // Segment ids change on clone; user must re-link.
+            is_enabled: false,        // Default OFF on clone — user opts in.
+            created_by: user!.id,
+          })),
+        );
+      }
+
+      // 11. Clone follow-up rules — disabled by default so the cloned campaign
+      // doesn't immediately start auto-sending.
+      const { data: followUps } = await supabase
+        .from("campaign_follow_up_rules")
+        .select("template_id, trigger_event, wait_business_days, max_attempts")
+        .eq("campaign_id", sourceId);
+      if (followUps?.length) {
+        await supabase.from("campaign_follow_up_rules").insert(
+          followUps.map((r) => ({
+            campaign_id: newId,
+            template_id: r.template_id ? templateIdMap.get(r.template_id) ?? null : null,
+            trigger_event: r.trigger_event,
+            wait_business_days: r.wait_business_days,
+            max_attempts: r.max_attempts,
+            is_enabled: false,
+            created_by: user!.id,
+          })),
+        );
+      }
+
+      // 12. Clone campaign-scoped send caps (only scope='campaign' rows;
+      // global / per_user / per_mailbox caps are tenant-wide).
+      const { data: caps } = await supabase
+        .from("campaign_send_caps")
+        .select("scope, daily_limit, hourly_limit, is_enabled")
+        .eq("campaign_id", sourceId)
+        .eq("scope", "campaign");
+      if (caps?.length) {
+        await supabase.from("campaign_send_caps").insert(
+          caps.map((c) => ({
+            campaign_id: newId,
+            scope: c.scope,
+            daily_limit: c.daily_limit,
+            hourly_limit: c.hourly_limit,
+            is_enabled: c.is_enabled,
+            created_by: user!.id,
+          })),
+        );
+      }
+
+      // 13. Clone timing windows.
+      const { data: windows } = await supabase
+        .from("campaign_timing_windows")
+        .select("*")
+        .eq("campaign_id", sourceId);
+      if (windows?.length) {
+        await supabase.from("campaign_timing_windows").insert(
+          windows.map((w: any) => {
+            const { id: _id, campaign_id: _cid, created_at: _ca, updated_at: _ua, ...rest } = w;
+            return { ...rest, campaign_id: newId, created_by: user!.id };
+          }),
+        );
+      }
+
+      // Re-read the full list-shape row so we can surgically insert it into the cache.
       const { data: cloned } = await supabase
         .from("campaigns")
-        .select("id, slug, campaign_name")
+        .select(LIST_COLUMNS)
         .eq("id", newId)
         .maybeSingle();
-      return { id: newId, slug: cloned?.slug ?? null, campaign_name: cloned?.campaign_name ?? null };
+      const row = cloned as Campaign | null;
+      return {
+        id: newId,
+        slug: row?.slug ?? null,
+        campaign_name: row?.campaign_name ?? null,
+        row,
+      };
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+    onSuccess: ({ row }) => {
+      // B6: surgical insert into the active campaigns list.
+      if (row) {
+        queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+          prev ? [row, ...prev.filter((c) => c.id !== row.id)] : prev,
+        );
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      }
       queryClient.invalidateQueries({ queryKey: ["campaign-mart-all"] });
       toast({ title: "Campaign cloned successfully" });
     },
@@ -410,6 +718,7 @@ export function useCampaigns(options: UseCampaignsOptions = {}) {
     error: campaignsQuery.error,
     createCampaign,
     updateCampaign,
+    transitionStatus,
     deleteCampaign,
     deleteCampaignsBulk,
     archiveCampaign,
@@ -619,15 +928,26 @@ export function useCampaignDetail(
       .eq("campaign_id", campaignId)
       .single();
 
+    let nextMartComplete: boolean | null = null;
     if (updated) {
-      const allDone = updated.message_done && updated.audience_done && updated.region_done && updated.timing_done;
+      const allDone = !!(updated.message_done && updated.audience_done && updated.region_done && updated.timing_done);
       await supabase.from("campaigns").update({ mart_complete: allDone }).eq("id", campaignId);
+      nextMartComplete = allDone;
     }
 
     queryClient.invalidateQueries({ queryKey: ["campaign-mart", campaignId] });
     queryClient.invalidateQueries({ queryKey: ["campaign-mart-all"] });
-    queryClient.invalidateQueries({ queryKey: ["campaign", campaignId] });
-    queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+    // B6: surgically patch `mart_complete` on the cached detail + list rows.
+    if (nextMartComplete !== null) {
+      queryClient.setQueryData(["campaign", campaignId], (prev: Campaign | undefined) =>
+        prev ? { ...prev, mart_complete: nextMartComplete } : prev,
+      );
+      queryClient.setQueryData<Campaign[]>(["campaigns"], (prev) =>
+        prev
+          ? prev.map((c) => (c.id === campaignId ? { ...c, mart_complete: nextMartComplete } : c))
+          : prev,
+      );
+    }
   };
 
   return {
@@ -671,11 +991,20 @@ export function useCampaignIdFromSlug(rawId: string | undefined) {
         .maybeSingle();
       if (bySlug?.id) return bySlug.id as string;
 
-      // Legacy fallback: older URLs may use the plain slugified name.
+      // Legacy fallback: older URLs may use the plain slugified name (no
+      // unique suffix). Use a server-side filter via an `ilike` on
+      // campaign_name reconstructed from the slug — bounded to 5 candidates,
+      // ordered by created_at, instead of fetching every campaign in the
+      // workspace just to JS-filter.
+      // Slug example "acme-q4-launch" → name pattern "acme q4 launch".
+      const namePattern = rawId.replace(/-/g, " ");
       const { data, error } = await supabase
         .from("campaigns")
-        .select("id,campaign_name")
-        .is("archived_at", null);
+        .select("id, campaign_name, created_at")
+        .is("archived_at", null)
+        .ilike("campaign_name", namePattern)
+        .order("created_at", { ascending: false })
+        .limit(5);
       if (error) throw error;
       const match = (data || []).find((c) => {
         const slug = c.campaign_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");

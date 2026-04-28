@@ -16,6 +16,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useCampaigns } from "@/hooks/useCampaigns";
 import { useUserDisplayNames } from "@/hooks/useUserDisplayNames";
 import { CampaignModal } from "@/components/campaigns/CampaignModal";
+import { FirstRunWizard } from "@/components/campaigns/FirstRunWizard";
 import { CampaignDashboard } from "@/components/campaigns/CampaignDashboard";
 import { AccountModal } from "@/components/AccountModal";
 import { ContactModal } from "@/components/ContactModal";
@@ -93,6 +94,7 @@ export default function Campaigns() {
   const { displayNames } = useUserDisplayNames(ownerIds);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [editCampaign, setEditCampaign] = useState<any>(null);
   const [archiveId, setArchiveId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -156,7 +158,10 @@ export default function Campaigns() {
         ownerName.includes(q) ||
         tagsStr.includes(q);
       const matchesStatus = statusFilter === "all" || c.status === statusFilter;
-      const matchesType = typeFilter === "all" || campaignTypeLabel(c.campaign_type) === typeFilter;
+      // Compare on the raw enum value — the URL holds the canonical key, not
+      // the human label. Round-tripping through campaignTypeLabel silently
+      // dropped legacy values whose label maps differently.
+      const matchesType = typeFilter === "all" || (c.campaign_type || "") === typeFilter;
       const matchesPriority = priorityFilter === "all" || (c.priority || "Medium") === priorityFilter;
       const matchesChannel = channelFilter === "all" || (c.primary_channel || "") === channelFilter;
       return matchesSearch && matchesStatus && matchesType && matchesPriority && matchesChannel;
@@ -191,13 +196,24 @@ export default function Campaigns() {
 
   // Inline status change (Phase 2.10) — respects transition rules
   const handleInlineStatusChange = async (c: any, newStatus: string) => {
-    const isStrategyComplete = !!c.mart_complete;
+    // A1: List page must use the SAME activation gate as the detail page.
+    // `mart_complete` only covers the 4 strategy flags; the detail page also
+    // requires a primary_channel and a start/end date before allowing
+    // Draft → Active. Otherwise the campaign activates here but immediately
+    // fails at first send.
+    const hasChannel = !!(c.primary_channel && String(c.primary_channel).trim());
+    const hasDates = !!c.start_date && !!c.end_date;
+    const isStrategyComplete = !!c.mart_complete && hasChannel && hasDates;
     const allowed = allowedTransitions(c.status as CampaignStatus, isStrategyComplete);
     if (!allowed.includes(newStatus as CampaignStatus)) {
+      const missing: string[] = [];
+      if (!c.mart_complete) missing.push("4 strategy steps");
+      if (!hasChannel) missing.push("primary channel");
+      if (!hasDates) missing.push("start & end date");
       toast({
         title: "Status change blocked",
         description: newStatus === "Active" && !isStrategyComplete
-          ? "Complete all 4 strategy steps before activating this campaign."
+          ? `Before activating, finish: ${missing.join(", ")}.`
           : `Cannot transition from ${c.status} to ${newStatus}.`,
         variant: "destructive",
       });
@@ -349,7 +365,7 @@ export default function Campaigns() {
               <List className="h-4 w-4" />
             </ToggleGroupItem>
           </ToggleGroup>
-          <Button size="sm" onClick={() => { setEditCampaign(null); setModalOpen(true); }}>
+          <Button size="sm" onClick={() => setWizardOpen(true)}>
             <Plus className="h-4 w-4 mr-2" /> New Campaign
           </Button>
         </div>
@@ -372,10 +388,9 @@ export default function Campaigns() {
             <SelectTrigger className="w-[140px] h-9"><SelectValue placeholder="Status" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Statuses</SelectItem>
-              <SelectItem value="Draft">Draft</SelectItem>
-              <SelectItem value="Active">Active</SelectItem>
-              <SelectItem value="Paused">Paused</SelectItem>
-              <SelectItem value="Completed">Completed</SelectItem>
+                {STATUS_OPTIONS.map((status) => (
+                  <SelectItem key={status.value} value={status.value}>{status.label}</SelectItem>
+                ))}
             </SelectContent>
           </Select>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
@@ -462,7 +477,7 @@ export default function Campaigns() {
           onArchive={(id) => setArchiveId(id)}
           onRestore={(id) => restoreCampaign.mutate(id)}
           onDelete={(id) => setDeleteId(id)}
-          onCreate={() => { setEditCampaign(null); setModalOpen(true); }}
+          onCreate={() => setWizardOpen(true)}
           onOpenAccount={(id) => setEditAccountId(id)}
           onOpenContact={(id) => setEditContactId(id)}
         />
@@ -532,7 +547,9 @@ export default function Campaigns() {
                           className={`cursor-pointer hover:bg-muted/50 ${campaign.archived_at ? "opacity-60" : ""} ${isSelected ? "bg-primary/5" : ""}`}
                           onMouseEnter={() => prefetchCampaign(campaign.id)}
                           onClick={() => {
-                            const slug = campaign.campaign_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+                            // Always prefer the canonical slug from the DB trigger to
+                            // avoid the URL flicker caused by the detail page rewriting it.
+                            const slug = campaign.slug || campaign.campaign_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
                             navigate(`/campaigns/${slug}`);
                           }}
                         >
@@ -608,7 +625,7 @@ export default function Campaigns() {
                             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                               <Tooltip><TooltipTrigger asChild>
                                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => {
-                                  const slug = campaign.campaign_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+                                  const slug = campaign.slug || campaign.campaign_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
                                   navigate(`/campaigns/${slug}`);
                                 }}>
                                   <Eye className="h-4 w-4 text-muted-foreground" />
@@ -687,6 +704,8 @@ export default function Campaigns() {
         onCreated={(id) => navigate(`/campaigns/${id}`)}
       />
 
+      <FirstRunWizard open={wizardOpen} onClose={() => setWizardOpen(false)} />
+
       <AccountModal
         open={!!editAccountId && !!editAccount}
         onOpenChange={(o) => !o && setEditAccountId(null)}
@@ -725,7 +744,10 @@ export default function Campaigns() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete Campaign Permanently?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete the campaign and all of its associated data (accounts, contacts, communications, templates). This action cannot be undone.
+              This permanently removes the campaign and everything attached to it:
+              accounts, contacts, communications, templates, sequences, segments,
+              send caps, timing windows, follow-up rules, queued send jobs, and any
+              linked action items / reminders. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -749,7 +771,7 @@ export default function Campaigns() {
             <AlertDialogDescription>
               {bulkAction === "archive" && "Selected campaigns will be moved to the archive. You can restore them later."}
               {bulkAction === "restore" && "Selected campaigns will be moved back to the active list."}
-              {bulkAction === "delete" && "This will permanently delete the selected campaigns and all their associated data. This action cannot be undone."}
+              {bulkAction === "delete" && "This permanently removes the selected campaigns and everything attached to them: accounts, contacts, communications, templates, sequences, segments, send caps, timing windows, follow-up rules, queued send jobs, and any linked action items / reminders. This cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -46,11 +46,14 @@ export function SyncStatusPill({ lastSyncedAt, isSyncing, hasError, onRetry, cla
       ? `Updated ${formatDistanceToNow(lastSyncedAt, { addSuffix: false })} ago`
       : "Up to date";
 
+  const canManualSync = !!onRetry && tone !== "syncing";
   const tooltip =
     tone === "syncing"
       ? "Refreshing data…"
       : tone === "error"
       ? "Last sync failed. Click retry."
+      : canManualSync
+      ? "Click to re-sync replies"
       : lastSyncedAt
       ? `Last synced ${lastSyncedAt.toLocaleTimeString()}`
       : "No sync recorded yet";
@@ -61,11 +64,12 @@ export function SyncStatusPill({ lastSyncedAt, isSyncing, hasError, onRetry, cla
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={tone === "error" ? onRetry : undefined}
-            disabled={tone !== "error"}
+            onClick={canManualSync ? onRetry : undefined}
+            disabled={!canManualSync}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-md border bg-card px-2 py-0.5 text-[11px] text-muted-foreground transition-colors",
-              tone === "error" && "hover:bg-amber-50 dark:hover:bg-amber-950/30 cursor-pointer",
+              canManualSync && "cursor-pointer hover:bg-muted/60 hover:text-foreground",
+              tone === "error" && "hover:bg-amber-50 dark:hover:bg-amber-950/30",
               className
             )}
           >
@@ -77,6 +81,7 @@ export function SyncStatusPill({ lastSyncedAt, isSyncing, hasError, onRetry, cla
               <CheckCircle2 className="h-3 w-3 text-emerald-600" />
             )}
             <span className="tabular-nums">{label}</span>
+            {canManualSync && tone !== "error" && <RefreshCw className="h-3 w-3 opacity-70" />}
             {tone === "error" && <span className="ml-0.5 underline">Retry</span>}
           </button>
         </TooltipTrigger>

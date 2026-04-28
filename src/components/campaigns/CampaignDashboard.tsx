@@ -16,6 +16,7 @@ import {
   Search, Users, Building2, MessageSquare, Mail,
   TrendingUp, Inbox, Edit2, Copy, Archive, Eye, RefreshCw, Download, Plus, X, Check,
   ChevronRight, ChevronDown, Phone, Linkedin, CornerDownRight, Activity, ExternalLink,
+  Circle, CornerUpLeft,
 } from "lucide-react";
 import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
@@ -355,9 +356,14 @@ export function CampaignDashboard({ campaigns, getStrategyProgress, getStrategyD
 
   const handleStatClick = (label: string, filter: string | null) => {
     if (label === "Total") {
+      // Full reset so "Total" behaves like a clear-all rather than a partial reset.
       setStatusFilter(null);
       setTypeFilter(null);
       setEngagementFilter(null);
+      setPriorityFilter("all");
+      setOwnerFilter("all");
+      setChannelFilter("all");
+      setSearch("");
       return;
     }
     setStatusFilter((prev) => (prev === filter ? null : filter));
@@ -529,7 +535,7 @@ export function CampaignDashboard({ campaigns, getStrategyProgress, getStrategyD
     <TooltipProvider delayDuration={200}>
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {/* Stat Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
           {stats.map((s) => {
             const isActive = s.label === "Total" ? !statusFilter && !typeFilter : statusFilter === s.filter;
             return (
@@ -543,22 +549,22 @@ export function CampaignDashboard({ campaigns, getStrategyProgress, getStrategyD
                 onClick={() => handleStatClick(s.label, s.filter)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleStatClick(s.label, s.filter); } }}
               >
-                <CardContent className="p-3 flex items-center gap-3">
-                  <div className={`h-8 w-8 rounded-lg ${STAT_ICON_BG[s.label] || "bg-muted"} flex items-center justify-center shrink-0 relative`}>
-                    <s.icon className={`h-4 w-4 ${s.color} shrink-0`} />
+                <CardContent className="p-2 flex items-center gap-2 min-w-0">
+                  <div className={`h-7 w-7 rounded-md ${STAT_ICON_BG[s.label] || "bg-muted"} flex items-center justify-center shrink-0 relative`}>
+                    <s.icon className={`h-3.5 w-3.5 ${s.color} shrink-0`} />
                     {isActive && s.label !== "Total" && (
-                      <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-primary flex items-center justify-center">
-                        <Check className="h-2 w-2 text-primary-foreground" />
+                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-primary flex items-center justify-center">
+                        <Check className="h-1.5 w-1.5 text-primary-foreground" />
                       </span>
                     )}
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     {aggLoading && campaigns.length === 0 ? (
-                      <Skeleton className="h-6 w-10" />
+                      <Skeleton className="h-5 w-8" />
                     ) : (
-                      <p className={`text-2xl font-bold leading-none tabular-nums ${STAT_VALUE_COLORS[s.label] || ""}`}>{s.value}</p>
+                      <p className={`text-lg font-bold leading-none tabular-nums ${STAT_VALUE_COLORS[s.label] || ""}`}>{s.value}</p>
                     )}
-                    <p className="text-xs text-muted-foreground mt-0.5">{s.label}</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5 truncate">{s.label}</p>
                   </div>
                 </CardContent>
               </Card>
@@ -566,8 +572,9 @@ export function CampaignDashboard({ campaigns, getStrategyProgress, getStrategyD
           })}
         </div>
 
-        {/* Section 1 — Insights row */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+        {/* Section 1 — Insights row (Top Active + Email Engagement) */}
+        {totalCommsDistinct > 0 && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           {/* Top Active Campaigns */}
           <Card className="border shadow-none min-h-[260px] flex flex-col">
             <CardHeader className="pb-1 pt-3 px-4">
@@ -727,95 +734,47 @@ export function CampaignDashboard({ campaigns, getStrategyProgress, getStrategyD
             </CardContent>
           </Card>
 
-          {/* Quick Stats */}
-          <Card className="border shadow-none min-h-[260px] flex flex-col">
-            <CardHeader className="pb-1 pt-3 px-4">
-              <CardTitle className="text-sm font-medium">Quick Stats</CardTitle>
-            </CardHeader>
-            <CardContent className="p-3 pt-2 flex-1">
-              <div className="grid grid-cols-2 gap-2 h-full">
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      className="flex flex-col justify-between p-3 rounded-md bg-muted/30 hover:bg-muted/60 transition-colors text-left"
-                      onClick={() => setStatsPanel("accounts")}
-                    >
-                      <div className="h-7 w-7 rounded-md bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-                        <Building2 className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
-                      </div>
-                      <div>
-                        {aggLoading ? <Skeleton className="h-5 w-10" /> : (
-                          <p className="text-xl font-bold leading-none tabular-nums">{totalAccountsDistinct}</p>
-                        )}
-                        <p className="text-[10px] text-muted-foreground mt-1">Accounts</p>
-                      </div>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>Distinct accounts across active campaigns (shared accounts counted once)</TooltipContent>
-                </Tooltip>
+        </div>
+        )}
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      className="flex flex-col justify-between p-3 rounded-md bg-muted/30 hover:bg-muted/60 transition-colors text-left"
-                      onClick={() => setStatsPanel("contacts")}
-                    >
-                      <div className="h-7 w-7 rounded-md bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
-                        <Users className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
-                      </div>
-                      <div>
-                        {aggLoading ? <Skeleton className="h-5 w-10" /> : (
-                          <p className="text-xl font-bold leading-none tabular-nums">{totalContactsDistinct}</p>
-                        )}
-                        <p className="text-[10px] text-muted-foreground mt-1">Contacts</p>
-                      </div>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>Distinct contacts across active campaigns (shared contacts counted once)</TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      className="flex flex-col justify-between p-3 rounded-md bg-muted/30 hover:bg-muted/60 transition-colors text-left"
-                      onClick={() => setStatsPanel("monitoring")}
-                    >
-                      <div className="h-7 w-7 rounded-md bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
-                        <Activity className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
-                      </div>
-                      <div>
-                        {aggLoading ? <Skeleton className="h-5 w-10" /> : (
-                          <p className="text-xl font-bold leading-none tabular-nums">{totalCommsDistinct}</p>
-                        )}
-                        <p className="text-[10px] text-muted-foreground mt-1">Monitoring</p>
-                      </div>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>Unique outreach touches across active campaigns (shared touches counted once)</TooltipContent>
-                </Tooltip>
-
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      className="flex flex-col justify-between p-3 rounded-md bg-muted/30 hover:bg-muted/60 transition-colors text-left"
-                      onClick={() => setStatsPanel("avg")}
-                    >
-                      <div className="h-7 w-7 rounded-md bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-                        <TrendingUp className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <div>
-                        {aggLoading ? <Skeleton className="h-5 w-10" /> : (
-                          <p className="text-xl font-bold leading-none tabular-nums">{avgComms}</p>
-                        )}
-                        <p className="text-[10px] text-muted-foreground mt-1">Avg / campaign</p>
-                      </div>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent>Unique outreach touches per active campaign (shared touches counted once)</TooltipContent>
-                </Tooltip>
-              </div>
-            </CardContent>
-          </Card>
+        {/* Quick stats chip row — clickable, redirects to real list pages */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-colors text-xs"
+            onClick={() => navigate("/accounts")}
+            title="Open Accounts list"
+          >
+            <Building2 className="h-3.5 w-3.5" />
+            <span className="font-semibold tabular-nums">{totalAccountsDistinct}</span>
+            <span className="text-blue-600/80 dark:text-blue-400/80">accounts</span>
+          </button>
+          <button
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition-colors text-xs"
+            onClick={() => navigate("/contacts")}
+            title="Open Contacts list"
+          >
+            <Users className="h-3.5 w-3.5" />
+            <span className="font-semibold tabular-nums">{totalContactsDistinct}</span>
+            <span className="text-emerald-600/80 dark:text-emerald-400/80">contacts</span>
+          </button>
+          <button
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-purple-50 dark:bg-purple-950/30 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors text-xs"
+            onClick={() => setStatsPanel("monitoring")}
+            title="Open monitoring panel"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            <span className="font-semibold tabular-nums">{totalCommsDistinct}</span>
+            <span className="text-purple-600/80 dark:text-purple-400/80">touches</span>
+          </button>
+          <button
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors text-xs"
+            onClick={() => setStatsPanel("avg")}
+            title="Average touches per active campaign"
+          >
+            <TrendingUp className="h-3.5 w-3.5" />
+            <span className="font-semibold tabular-nums">{avgComms}</span>
+            <span className="text-amber-600/80 dark:text-amber-400/80">avg / campaign</span>
+          </button>
         </div>
 
         {/* Section 2 — All Campaigns Table */}
@@ -902,25 +861,27 @@ export function CampaignDashboard({ campaigns, getStrategyProgress, getStrategyD
                   <TableHeader className="sticky top-0 bg-background z-10">
                     <TableRow className="hover:bg-transparent">
                       <TableHead className="text-xs whitespace-nowrap">Name</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap">Type</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap">Priority</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap">Owner</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap w-[120px]">Strategy</TableHead>
+                       <TableHead className="text-xs whitespace-nowrap">Status</TableHead>
                       <TableHead className="text-xs whitespace-nowrap text-right">Accounts</TableHead>
                       <TableHead className="text-xs whitespace-nowrap text-right">Contacts</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap text-right">Comms</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap">Engagement</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap">Start</TableHead>
-                      <TableHead className="text-xs whitespace-nowrap">End</TableHead>
+                      <TableHead className="text-xs whitespace-nowrap text-right">Touches</TableHead>
+                      <TableHead className="text-xs whitespace-nowrap text-right">Replies</TableHead>
+                      <TableHead className="text-xs whitespace-nowrap">Dates</TableHead>
                       <TableHead className="text-xs whitespace-nowrap text-right w-[120px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {filtered.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={13} className="text-center text-sm text-muted-foreground py-8">
-                          No campaigns match the current filters
+                        <TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-8">
+                          <div className="flex flex-col items-center gap-2">
+                            <span>No campaigns match the current filters</span>
+                            {hasActiveFilters && (
+                              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={clearAllFilters}>
+                                <X className="h-3 w-3 mr-1" /> Clear filters
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -933,73 +894,67 @@ export function CampaignDashboard({ campaigns, getStrategyProgress, getStrategyD
                         const sent = agg.sentBycamp[c.id] || 0;
                         const replies = agg.repliesBycamp[c.id] || 0;
                         const ownerName = c.owner ? (displayNames[c.owner] || "—") : "—";
+                        const ownerInitial = (ownerName?.trim()?.[0] || "?").toUpperCase();
+                        const replyRateRow = sent > 0 ? Math.round((replies / sent) * 100) : 0;
                         return (
                           <TableRow
                             key={c.id}
                             className="group cursor-pointer hover:bg-muted/50 even:bg-muted/10"
                             onClick={() => navigate(`/campaigns/${campaignSlugById[c.id] || slugify(c.campaign_name)}`)}
                           >
-                            <TableCell className="text-xs font-medium max-w-[200px] truncate">{c.campaign_name}</TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{campaignTypeLabel(c.campaign_type) || "—"}</TableCell>
-                            <TableCell>
-                              <Badge className={`text-[10px] ${PRIORITY_BADGE_CLASS[c.priority || "Medium"]}`} variant="secondary">
-                                {c.priority || "Medium"}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground">{ownerName}</TableCell>
-                            <TableCell>
-                              <Badge className={`text-[10px] ${STATUS_BADGE[c.status || "Draft"]}`} variant="secondary">{c.status || "Draft"}</Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
+                            <TableCell className="text-xs font-medium max-w-[260px]">
+                              <div className="flex items-center gap-2 min-w-0">
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <div className="flex items-center gap-2 cursor-help">
-                                      <Progress value={stratPct} className="h-1.5 w-16" />
-                                      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{strategy.count}/{strategy.total}</span>
-                                    </div>
+                                    <span className="h-5 w-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold flex items-center justify-center shrink-0">
+                                      {ownerInitial}
+                                    </span>
                                   </TooltipTrigger>
-                                  <TooltipContent side="right" className="text-xs">
-                                    {(() => {
-                                      const detail = getStrategyDetail?.(c.id);
-                                      const items = [
-                                        { label: "Message", done: detail?.message },
-                                        { label: "Audience", done: detail?.audience },
-                                        { label: "Region", done: detail?.region },
-                                        { label: "Timing", done: detail?.timing },
-                                      ];
-                                      return (
-                                        <div className="space-y-1">
-                                          {items.map((it) => (
-                                            <div key={it.label} className="flex items-center gap-2">
-                                              {it.done ? <Check className="h-3 w-3 text-emerald-500" /> : <X className="h-3 w-3 text-muted-foreground" />}
-                                              <span className={it.done ? "" : "text-muted-foreground"}>{it.label}</span>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      );
-                                    })()}
-                                  </TooltipContent>
+                                  <TooltipContent>{ownerName !== "—" ? ownerName : "Unassigned"}</TooltipContent>
                                 </Tooltip>
+                                <span className="truncate">{c.campaign_name}</span>
+                                <Badge className={`text-[10px] shrink-0 ${PRIORITY_BADGE_CLASS[c.priority || "Medium"]}`} variant="secondary">
+                                  {c.priority || "Medium"}
+                                </Badge>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge className={`text-[10px] ${STATUS_BADGE[c.status || "Draft"]}`} variant="secondary">{c.status || "Draft"}</Badge>
                             </TableCell>
                             <TableCell className="text-xs text-right tabular-nums">{acc}</TableCell>
                             <TableCell className="text-xs text-right tabular-nums">{con}</TableCell>
                             <TableCell className="text-xs text-right tabular-nums">{com}</TableCell>
-                            <TableCell className="text-xs">
+                            <TableCell className="text-xs text-right">
                               {sent > 0 ? (
-                                <span className="text-muted-foreground tabular-nums">
-                                  <span className="text-foreground font-medium">{replies}</span>/{sent} replies
-                                </span>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span
+                                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] tabular-nums cursor-help ${
+                                        replyRateRow >= 30
+                                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                          : replyRateRow >= 10
+                                          ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                          : "bg-muted text-muted-foreground"
+                                      }`}
+                                    >
+                                      <CornerUpLeft className="h-2.5 w-2.5" />
+                                      {replies}
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent>{replies} of {sent} email threads replied ({replyRateRow}%)</TooltipContent>
+                                </Tooltip>
                               ) : (
                                 <span className="text-muted-foreground">—</span>
                               )}
                             </TableCell>
-                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                              {c.start_date ? format(new Date(c.start_date + "T00:00:00"), "dd MMM yy") : "—"}
-                            </TableCell>
-                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                              {c.end_date ? format(new Date(c.end_date + "T00:00:00"), "dd MMM yy") : "—"}
+                            <TableCell className="text-xs text-muted-foreground whitespace-nowrap tabular-nums">
+                              {c.start_date || c.end_date ? (
+                                <span>
+                                  {c.start_date ? format(new Date(c.start_date + "T00:00:00"), "d MMM") : "—"}
+                                  <span className="mx-1 text-muted-foreground/60">→</span>
+                                  {c.end_date ? format(new Date(c.end_date + "T00:00:00"), "d MMM yy") : "—"}
+                                </span>
+                              ) : "—"}
                             </TableCell>
                             <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">

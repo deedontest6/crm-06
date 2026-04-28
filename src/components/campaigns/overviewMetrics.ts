@@ -140,7 +140,9 @@ export function getRepliedThreads(comms: any[]) {
 
 export function getOpenedThreads(comms: any[]) {
   return getEmailThreads(comms).filter(
-    (t) => t.outboundCount > 0 && t.messages.some((m: any) => m.opened_at)
+    (t) =>
+      t.outboundCount > 0 &&
+      t.messages.some((m: any) => m.opened_at && !m.is_bot_open)
   );
 }
 

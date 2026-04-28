@@ -1,4 +1,5 @@
 import { useState, Fragment, useMemo, useEffect, useCallback } from "react";
+import { TableVirtuoso } from "react-virtuoso";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,15 +27,21 @@ import { parseEmailBody } from "./emailBody";
 import { SyncStatusPill } from "./SyncStatusPill";
 import { isReachableEmail, isReachableLinkedIn, isReachablePhone, normalizeChannel, channelLabel, formatPhoneForDisplay } from "@/lib/email";
 import { areSubjectsCompatible } from "@/utils/subjectNormalize";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
+import { ReplyIntentBadge } from "./ReplyIntentBadge";
+import { StandardPagination } from "@/components/shared/StandardPagination";
+import { SendJobPanel } from "./SendJobPanel";
+import { matchesSegmentFilters } from "./segments/segmentMatcher";
 
 interface Props {
   campaignId: string;
   isCampaignEnded: boolean;
+  /** Read-only mode: campaign is Completed → disable add/edit/delete actions */
+  isReadOnly?: boolean;
   viewMode?: "outreach" | "analytics";
   onViewModeChange?: (v: "outreach" | "analytics") => void;
   initialChannel?: "email" | "linkedin" | "call";
-  initialStatusFilter?: "all" | "sent" | "replied" | "failed" | "bounced";
+  initialStatusFilter?: "all" | "sent" | "replied" | "failed" | "bounced" | "notReplied" | "needsFollowup";
   initialThreadId?: string;
 }
 
@@ -59,7 +66,7 @@ interface ColumnDef {
   className?: string;
 }
 
-export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, onViewModeChange, initialChannel, initialStatusFilter, initialThreadId }: Props) {
+export function CampaignCommunications({ campaignId, isCampaignEnded, isReadOnly = false, viewMode, onViewModeChange, initialChannel, initialStatusFilter, initialThreadId }: Props) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const { logCreate } = useCRUDAudit();
@@ -76,11 +83,16 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
   const [sortAsc, setSortAsc] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [outreachTab, setOutreachTab] = useState<OutreachTab>("email");
+  // Thread-list pagination — large campaigns can produce hundreds of threads;
+  // rendering them all at once was the dominant cost on Monitoring tab open.
+  const [threadPage, setThreadPage] = useState(1);
+  const [threadPageSize, setThreadPageSize] = useState(25);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [emailStatusFilter, setEmailStatusFilter] = useState<"all" | "sent" | "replied" | "failed" | "bounced">("all");
+  const [emailStatusFilter, setEmailStatusFilter] = useState<"all" | "sent" | "replied" | "failed" | "bounced" | "notReplied" | "needsFollowup">("all");
   const [linkedinStatusFilter, setLinkedinStatusFilter] = useState<"all" | "connectionSent" | "connected" | "messageSent" | "responded">("all");
   const [callStatusFilter, setCallStatusFilter] = useState<"all" | "interested" | "notInterested" | "callLater" | "noAnswer">("all");
+  const [segmentFilter, setSegmentFilter] = useState<string>("all");
   // B1: Eligible (reachable, no touch yet) | Touched (has at least one touch) | All — per LinkedIn/Call tab.
   const [linkedinScope, setLinkedinScope] = useState<"all" | "eligible" | "touched">("all");
   const [callScope, setCallScope] = useState<"all" | "eligible" | "touched">("all");
@@ -89,6 +101,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
   const [viewFullEmail, setViewFullEmail] = useState<any | null>(null);
   const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
   const [selectedThreadKey, setSelectedThreadKey] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [threadInitDone, setThreadInitDone] = useState(false);
   const [isResyncing, setIsResyncing] = useState(false);
   const [resyncResult, setResyncResult] = useState<null | {
@@ -126,10 +139,19 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     });
   };
 
-  // Background auto-sync of email replies — every 60s while mounted, plus once 2s after mount.
-  // Silent (no toasts). Failures only logged to console.
+  // Background auto-sync of email replies. Heavy edge function call (scans Microsoft
+  // Graph for replies), so we throttle aggressively: at most once per 5 minutes
+  // GLOBALLY (across all campaign tabs/windows) via sessionStorage. Manual refreshes
+  // bypass the throttle.
+  const REPLY_SYNC_THROTTLE_MS = 5 * 60_000;
+  const REPLY_SYNC_KEY = "campaign-reply-sync-last-run";
   const syncReplies = useCallback(async (manual = false) => {
     if (!manual && typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    if (!manual && typeof sessionStorage !== "undefined") {
+      const last = Number(sessionStorage.getItem(REPLY_SYNC_KEY) || 0);
+      if (Date.now() - last < REPLY_SYNC_THROTTLE_MS) return;
+      sessionStorage.setItem(REPLY_SYNC_KEY, String(Date.now()));
+    }
     if (manual) setIsSyncing(true);
     try {
       await supabase.functions.invoke("check-email-replies", { body: {} });
@@ -174,10 +196,12 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     }
   }, [campaignId, queryClient]);
 
+  // Background poller: every 5 minutes attempts a sync (the throttle inside
+  // syncReplies will skip if another tab already ran it recently). No on-mount
+  // call — we rely on the visibility-change handler below for fresh-tab reactivity.
   useEffect(() => {
-    const initial = setTimeout(syncReplies, 2000);
-    const interval = setInterval(syncReplies, 60_000);
-    return () => { clearTimeout(initial); clearInterval(interval); };
+    const interval = setInterval(() => syncReplies(), REPLY_SYNC_THROTTLE_MS);
+    return () => clearInterval(interval);
   }, [syncReplies]);
 
   // Visibility-change: when the tab becomes visible after being hidden for >2 min,
@@ -238,7 +262,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     queryFn: async () => {
       const { data, error } = await supabase
         .from("campaign_contacts")
-        .select("*, contacts(contact_name, email, company_name, position, region, linkedin, phone_no), accounts(account_name, phone)")
+        .select("*, contacts(contact_name, email, company_name, position, region, industry, linkedin, phone_no), accounts(account_name, phone, industry, region, country)")
         .eq("campaign_id", campaignId);
       if (error) throw error;
       return data;
@@ -246,6 +270,35 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     staleTime: 60_000,
     gcTime: 5 * 60_000,
   });
+
+  const { data: campaignSegments = [] } = useQuery({
+    queryKey: ["campaign-segments", campaignId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("campaign_audience_segments")
+        .select("id, segment_name, filters")
+        .eq("campaign_id", campaignId)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+    staleTime: 60_000,
+  });
+
+  const activeSegmentFilters = useMemo(() => {
+    if (segmentFilter === "all") return null;
+    const seg = campaignSegments.find((s: any) => s.id === segmentFilter);
+    return (seg?.filters as any) || null;
+  }, [segmentFilter, campaignSegments]);
+
+  const segmentMatchedContactIds = useMemo(() => {
+    if (!activeSegmentFilters) return null;
+    const ids = new Set<string>();
+    (campaignContacts as any[]).forEach((cc: any) => {
+      if (matchesSegmentFilters(cc, activeSegmentFilters)) ids.add(cc.contact_id);
+    });
+    return ids;
+  }, [activeSegmentFilters, campaignContacts]);
 
   const { data: campaignAccounts = [] } = useQuery({
     queryKey: ["campaign-accounts", campaignId, "monitoring"],
@@ -271,6 +324,25 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     staleTime: 60_000,
     gcTime: 5 * 60_000,
   });
+
+  // Follow-up rules — used to compute "Needs Follow-up" threshold (max wait_business_days across enabled rules).
+  const { data: followUpRules = [] } = useQuery({
+    queryKey: ["campaign-follow-up-rules", campaignId, "monitoring"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("campaign_follow_up_rules")
+        .select("wait_business_days, is_enabled")
+        .eq("campaign_id", campaignId);
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 5 * 60_000,
+  });
+  const followUpWaitDays = useMemo(() => {
+    const enabled = followUpRules.filter((r: any) => r.is_enabled);
+    if (enabled.length === 0) return 3; // sensible default when no rules configured
+    return Math.max(...enabled.map((r: any) => Number(r.wait_business_days) || 3));
+  }, [followUpRules]);
 
   // Campaign metadata for primary-channel labelling
   const { data: campaignMeta } = useQuery({
@@ -383,10 +455,38 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     const contactActivity: Record<string, any[]> = {};
     const orphans: any[] = [];
 
+    // ── Pass 1: build a key → bucket map keyed by `conversation_id::contact_id`
+    // PLUS a secondary index from `internet_message_id` → bucketKey so we can
+    // stitch orphan rows whose `references` chain points at a known parent.
+    const imidToKey = new Map<string, string>();
+    communications.forEach((c: any) => {
+      if (c.communication_type === "Email" && c.conversation_id && c.internet_message_id) {
+        const key = `${c.conversation_id}::${c.contact_id || "no-contact"}`;
+        imidToKey.set(String(c.internet_message_id), key);
+      }
+    });
+
+    // Helper: resolve a row's effective bucket key by walking its references
+    // chain. Returns the row's own composite key when no parent is found.
+    const resolveBucketKey = (c: any): string => {
+      const own = `${c.conversation_id}::${c.contact_id || "no-contact"}`;
+      const refs: string = (c.references || "").trim();
+      if (!refs) return own;
+      // References is space-separated, oldest → newest; walk newest-first
+      // so we land on the immediate parent's bucket if multiple ancestors
+      // are tracked.
+      const ids = refs.split(/\s+/).filter(Boolean).reverse();
+      for (const id of ids) {
+        const key = imidToKey.get(id);
+        if (key && key !== own) return key;
+      }
+      return own;
+    };
+
     communications.forEach((c: any) => {
       if (c.communication_type === "Email" && c.conversation_id) {
-        // Composite key: conversation_id + contact_id
-        const key = `${c.conversation_id}::${c.contact_id || "no-contact"}`;
+        // Composite key: conversation_id + contact_id (with references-chain stitch)
+        const key = resolveBucketKey(c);
         if (!emailThreads[key]) emailThreads[key] = [];
         emailThreads[key].push(c);
       } else if (c.communication_type === "Email") {
@@ -431,8 +531,11 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
       }
       if (cleanedMsgs.length === 0) return;
 
-      const sorted = cleanedMsgs.sort((a, b) => new Date(a.communication_date || 0).getTime() - new Date(b.communication_date || 0).getTime());
-      const lastMsg = sorted[sorted.length - 1];
+      // Render newest-on-top (Outlook style). Use descending sort so messages[0]
+      // is always the most recent — header summary, "isLatest" detection, and
+      // the auto-expand seed all rely on this position.
+      const sorted = cleanedMsgs.sort((a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime());
+      const lastMsg = sorted[0];
       const hasReply = sorted.some((m) => m.sent_via === "graph-sync");
       const hasFailed = sorted.some((m) => m.email_status === "Failed" || m.delivery_status === "failed");
       // Channel counts must reflect outbound only — inbound graph-sync rows
@@ -456,8 +559,8 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
 
     // Contact activity groups (non-email or non-threaded)
     Object.entries(contactActivity).forEach(([contactId, msgs]) => {
-      const sorted = msgs.sort((a, b) => new Date(a.communication_date || 0).getTime() - new Date(b.communication_date || 0).getTime());
-      const lastMsg = sorted[sorted.length - 1];
+      const sorted = msgs.sort((a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime());
+      const lastMsg = sorted[0];
       result.push({
         contactId,
         contactName: lastMsg?.contacts?.contact_name || "Unknown",
@@ -720,6 +823,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
       if (accountFilter !== "all" && c.account_id !== accountFilter) return false;
       if (contactFilter !== "all" && c.contact_id !== contactFilter) return false;
       if (ownerFilter !== "all" && c.owner !== ownerFilter) return false;
+      if (segmentMatchedContactIds && !segmentMatchedContactIds.has(c.contact_id)) return false;
       if (searchTerm) {
         const q = searchTerm.toLowerCase();
         const match = c.contacts?.contact_name?.toLowerCase().includes(q) ||
@@ -741,7 +845,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
 
 
 
-  const emailFiltered = useMemo(() => applySort(applyFilters(emailComms)), [emailComms, accountFilter, contactFilter, ownerFilter, searchTerm, sortAsc]);
+  const emailFiltered = useMemo(() => applySort(applyFilters(emailComms)), [emailComms, accountFilter, contactFilter, ownerFilter, searchTerm, segmentMatchedContactIds, sortAsc]);
   const linkedinFiltered = useMemo(() => {
     const base = applySort(applyFilters(linkedinComms));
     if (linkedinStatusFilter === "all") return base;
@@ -752,7 +856,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
       responded: (c) => c.linkedin_status === "Responded",
     };
     return base.filter(map[linkedinStatusFilter] || (() => true));
-  }, [linkedinComms, accountFilter, contactFilter, ownerFilter, searchTerm, sortAsc, linkedinStatusFilter]);
+  }, [linkedinComms, accountFilter, contactFilter, ownerFilter, searchTerm, segmentMatchedContactIds, sortAsc, linkedinStatusFilter]);
   const callFiltered = useMemo(() => {
     const base = applySort(applyFilters(callComms));
     if (callStatusFilter === "all") return base;
@@ -763,7 +867,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
       noAnswer: (c) => c.call_outcome === "No Answer" || c.call_outcome === "Voicemail",
     };
     return base.filter(map[callStatusFilter] || (() => true));
-  }, [callComms, accountFilter, contactFilter, ownerFilter, searchTerm, sortAsc, callStatusFilter]);
+  }, [callComms, accountFilter, contactFilter, ownerFilter, searchTerm, segmentMatchedContactIds, sortAsc, callStatusFilter]);
 
   // Email threads — normalized after filtering. Header counts/badges always
   // reflect the messages that are actually rendered. Stable threadKey prevents
@@ -832,6 +936,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
             new Date(a.communication_date || 0).getTime()
         );
         const newest = sorted[0];
+        const newestParsed = parseEmailBody(newest?.body);
         const hasReply = sorted.some((m) => m.sent_via === "graph-sync");
         const hasFailed = sorted.some(
           (m) => m.email_status === "Failed" || m.delivery_status === "failed"
@@ -861,6 +966,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
           hasReply,
           hasFailed,
           threadLabel: newest?.subject || t.threadLabel || "Email Thread",
+          previewText: newestParsed.newText || newestParsed.quotedText || "No preview available",
           lastActivity: newest?.communication_date,
         };
       })
@@ -877,9 +983,24 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
         if (emailStatusFilter === "replied") return t.hasReply;
         if (emailStatusFilter === "failed") return t.hasFailed;
         if (emailStatusFilter === "bounced") return t.messages.some((m: any) => m.email_status === "Bounced");
+        if (emailStatusFilter === "notReplied") {
+          // Has at least one outbound, and no inbound reply yet.
+          const hasOutbound = t.messages.some((m: any) => (m.sent_via || "manual") !== "graph-sync");
+          return hasOutbound && !t.hasReply;
+        }
+        if (emailStatusFilter === "needsFollowup") {
+          // No reply yet, AND latest outbound was sent more than `followUpWaitDays` calendar days ago.
+          if (t.hasReply) return false;
+          const outbound = t.messages.filter((m: any) => (m.sent_via || "manual") !== "graph-sync");
+          if (outbound.length === 0) return false;
+          const latestOut = outbound.reduce((acc: any, m: any) =>
+            new Date(m.communication_date || 0) > new Date(acc.communication_date || 0) ? m : acc, outbound[0]);
+          const ageDays = (Date.now() - new Date(latestOut.communication_date || 0).getTime()) / (1000 * 60 * 60 * 24);
+          return ageDays >= followUpWaitDays;
+        }
         return true;
       }) as any[];
-  }, [threads, accountFilter, contactFilter, ownerFilter, searchTerm, emailStatusFilter]);
+  }, [threads, accountFilter, contactFilter, ownerFilter, searchTerm, segmentMatchedContactIds, emailStatusFilter, followUpWaitDays]);
 
   // Seed the newest message of each thread as expanded-by-default exactly once
   // per threadKey. After this, users can freely toggle (collapse/re-expand) any
@@ -928,6 +1049,29 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     }
   }, [emailThreadsFiltered, selectedThreadKey]);
 
+  // Deep-link: hydrate selectedThreadKey from ?thread= on mount, and persist to URL when it changes.
+  useEffect(() => {
+    const fromUrl = searchParams.get("thread");
+    if (fromUrl && fromUrl !== selectedThreadKey && emailThreadsFiltered.some((t: any) => t.threadKey === fromUrl)) {
+      setSelectedThreadKey(fromUrl);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emailThreadsFiltered.length]);
+
+  useEffect(() => {
+    const current = searchParams.get("thread");
+    if (selectedThreadKey && selectedThreadKey !== current) {
+      const next = new URLSearchParams(searchParams);
+      next.set("thread", selectedThreadKey);
+      setSearchParams(next, { replace: true });
+    } else if (!selectedThreadKey && current) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("thread");
+      setSearchParams(next, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedThreadKey]);
+
 
   // --- Badges ---
   const channelBadge = (type: string) => {
@@ -960,32 +1104,117 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
   // --- Shared table renderer ---
   const renderCommTable = (data: any[], columns: ColumnDef[], showChannelCol: boolean) => {
     if (data.length === 0) {
-      // B5: provide CTA hint for non-email empty states.
-      const cta =
-        outreachTab === "linkedin"
-          ? "Use Log LinkedIn above to record a touch."
-          : outreachTab === "call"
-          ? "Use Log Call above to record a touch."
-          : "";
+      // C5: actionable empty state — surface a CTA that triggers the relevant
+      // primary action for each channel directly from the empty Monitoring tab.
+      const isLinkedIn = outreachTab === "linkedin";
+      const isCall = outreachTab === "call";
+      const isEmail = !isLinkedIn && !isCall;
       return (
-        <div className="text-center py-8">
-          <p className="text-sm text-muted-foreground">No outreach logged yet.</p>
-          {cta && <p className="text-xs text-muted-foreground mt-1">{cta}</p>}
+        <div className="flex flex-col items-center justify-center py-10 text-center gap-3">
+          <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
+            {isLinkedIn ? <Linkedin className="h-5 w-5 text-muted-foreground" /> :
+             isCall ? <Phone className="h-5 w-5 text-muted-foreground" /> :
+             <Mail className="h-5 w-5 text-muted-foreground" />}
+          </div>
+          <div>
+            <p className="text-sm font-medium">No outreach logged yet</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {isLinkedIn ? "Record your first LinkedIn touch to start tracking responses."
+               : isCall ? "Log your first call to start tracking outcomes."
+               : "Send your first campaign email or log a touch to begin tracking."}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            {isEmail && (
+              <Button size="sm" onClick={() => setEmailComposeOpen(true)}>
+                <Mail className="h-3.5 w-3.5 mr-1.5" /> Send your first email
+              </Button>
+            )}
+            {isLinkedIn && (
+              <Button size="sm" onClick={() => openLogModal("LinkedIn")}>
+                <Linkedin className="h-3.5 w-3.5 mr-1.5" /> Log a LinkedIn touch
+              </Button>
+            )}
+            {isCall && (
+              <Button size="sm" onClick={() => openLogModal("Call")}>
+                <Phone className="h-3.5 w-3.5 mr-1.5" /> Log a call
+              </Button>
+            )}
+          </div>
         </div>
       );
     }
+    // D2: Virtualize when row count is large. Below the threshold we keep the
+    // existing static table 1:1 (with expand/collapse) so small lists behave
+    // exactly as before. Above the threshold we switch to TableVirtuoso for
+    // 50k+ row scroll perf; the expand-detail row is inlined into the main row
+    // (since Virtuoso requires a single element per item) — only Subject/Body
+    // is shown inline; users can search/filter to narrow if they need full
+    // detail. Header, sort, and Actions cells remain identical.
+    const VIRTUALIZE_THRESHOLD = 100;
+    const useVirtual = data.length > VIRTUALIZE_THRESHOLD;
+
+    const headerRow = (
+      <TableRow>
+        <TableHead className="w-8"></TableHead>
+        {columns.map(col => (
+          <TableHead key={col.key} className={col.className || ""} onClick={col.sortable ? () => setSortAsc(!sortAsc) : undefined}>
+            {col.sortable ? <span className="flex items-center gap-1 cursor-pointer select-none">{col.label} <ArrowUpDown className="h-3 w-3" /></span> : col.label}
+          </TableHead>
+        ))}
+        <TableHead className="w-20">Actions</TableHead>
+      </TableRow>
+    );
+
+    const rowActions = (c: any) => (
+      <div className="flex items-center gap-0.5">
+        {!isCampaignEnded && c.communication_type === "Email" && c.contact_id && (
+          <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-0.5" onClick={() => openReply(c)}>
+            <Reply className="h-3 w-3" />
+          </Button>
+        )}
+        {!isCampaignEnded && c.contacts?.contact_name && (
+          <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-0.5"
+            onClick={() => openTaskForContact(c.contact_id, c.contacts?.contact_name || "")}>
+            <ListChecks className="h-3 w-3" />
+          </Button>
+        )}
+      </div>
+    );
+
+    if (useVirtual) {
+      // Virtualized path: fixed-height scroll container, no expand rows.
+      return (
+        <div className="text-[11px] text-muted-foreground mb-1 px-1">
+          Showing {data.length.toLocaleString()} rows (virtualized — expand-row details disabled; use search to narrow).
+          <TableVirtuoso
+            style={{ height: 600 }}
+            data={data}
+            components={{
+              Table: (props) => <Table {...props} style={{ ...(props as any).style }} />,
+              TableHead: TableHeader as any,
+              TableRow: TableRow as any,
+              TableBody: TableBody as any,
+            }}
+            fixedHeaderContent={() => headerRow}
+            itemContent={(_index, c: any) => (
+              <>
+                <TableCell className="px-2"></TableCell>
+                {columns.map(col => (
+                  <TableCell key={col.key} className={col.className}>{col.render(c)}</TableCell>
+                ))}
+                <TableCell onClick={(e) => e.stopPropagation()}>{rowActions(c)}</TableCell>
+              </>
+            )}
+          />
+        </div>
+      );
+    }
+
     return (
       <Table>
         <TableHeader>
-          <TableRow>
-            <TableHead className="w-8"></TableHead>
-            {columns.map(col => (
-              <TableHead key={col.key} className={col.className || ""} onClick={col.sortable ? () => setSortAsc(!sortAsc) : undefined}>
-                {col.sortable ? <span className="flex items-center gap-1 cursor-pointer select-none">{col.label} <ArrowUpDown className="h-3 w-3" /></span> : col.label}
-              </TableHead>
-            ))}
-            <TableHead className="w-20">Actions</TableHead>
-          </TableRow>
+          {headerRow}
         </TableHeader>
         <TableBody>
           {data.map((c: any) => (
@@ -997,21 +1226,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
                 {columns.map(col => (
                   <TableCell key={col.key} className={col.className}>{col.render(c)}</TableCell>
                 ))}
-                <TableCell onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center gap-0.5">
-                    {!isCampaignEnded && c.communication_type === "Email" && c.contact_id && (
-                      <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-0.5" onClick={() => openReply(c)}>
-                        <Reply className="h-3 w-3" />
-                      </Button>
-                    )}
-                    {!isCampaignEnded && c.contacts?.contact_name && (
-                      <Button variant="ghost" size="sm" className="h-6 text-[10px] gap-0.5"
-                        onClick={() => openTaskForContact(c.contact_id, c.contacts?.contact_name || "")}>
-                        <ListChecks className="h-3 w-3" />
-                      </Button>
-                    )}
-                  </div>
-                </TableCell>
+                <TableCell onClick={(e) => e.stopPropagation()}>{rowActions(c)}</TableCell>
               </TableRow>
               {expandedRows.has(c.id) && (
                 <TableRow>
@@ -1059,7 +1274,12 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     { key: "contact", label: "Contact", render: (c) => <span className="font-medium">{c.contacts?.contact_name || "—"}</span> },
     { key: "account", label: "Account", render: (c) => c.accounts?.account_name || "—" },
     { key: "subject", label: "Subject", render: (c) => <span className="truncate max-w-[200px] block">{c.subject || "—"}</span> },
-    { key: "status", label: "Status", render: (c) => c.email_status || "—" },
+    { key: "status", label: "Status", render: (c) => (
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span>{c.email_status || "—"}</span>
+        {c.reply_intent && <ReplyIntentBadge intent={c.reply_intent} />}
+      </div>
+    ) },
     { key: "delivery", label: "Delivery", render: (c) => deliveryBadge(c.communication_type, c.delivery_status) },
     { key: "owner", label: "Owner", render: (c) => <span className="text-sm">{c.owner ? displayNames[c.owner] || "—" : "—"}</span> },
   ];
@@ -1107,9 +1327,10 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
   ];
 
   // --- Inline filter controls (rendered inside the unified toolbar) ---
+
   const renderFilterControls = () => (
     <>
-      <div className="relative flex-1 min-w-[140px] max-w-[220px]">
+      <div className="relative w-full max-w-[320px]">
         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
         <Input placeholder="Search..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-7 h-7 text-xs" />
       </div>
@@ -1146,12 +1367,18 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
   };
 
   // --- Thread view (All tab only) ---
-  const renderThreadView = () => (
+  const renderThreadView = () => {
+    const totalThreads = threads.length;
+    const totalPages = Math.max(1, Math.ceil(totalThreads / threadPageSize));
+    const safePage = Math.min(threadPage, totalPages);
+    const startIdx = (safePage - 1) * threadPageSize;
+    const visible = threads.slice(startIdx, startIdx + threadPageSize);
+    return (
     <div className="space-y-2">
-      {threads.length === 0 ? (
+      {totalThreads === 0 ? (
         <div className="text-center py-8"><p className="text-sm text-muted-foreground">No outreach logged yet.</p></div>
       ) : (
-        threads.map((thread, idx) => (
+        visible.map((thread, idx) => (
           <Card key={`${thread.threadType}-${thread.contactId}-${idx}`} className="border">
             <Collapsible>
               <CollapsibleTrigger asChild>
@@ -1205,6 +1432,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
                         {msg.body && <p className="text-muted-foreground whitespace-pre-wrap mt-0.5 text-xs">{msg.body.substring(0, 200)}{msg.body.length > 200 ? "..." : ""}</p>}
                         {msg.notes && <p className="text-xs italic text-muted-foreground mt-0.5">Note: {msg.notes}</p>}
                         {msg.email_status && <span className="text-xs text-muted-foreground">Status: {msg.email_status}</span>}
+                        {msg.reply_intent && <span className="ml-2"><ReplyIntentBadge intent={msg.reply_intent} /></span>}
                         {msg.call_outcome && <span className="text-xs text-muted-foreground">Outcome: {msg.call_outcome}</span>}
                         {msg.linkedin_status && <span className="text-xs text-muted-foreground">LinkedIn: {msg.linkedin_status}</span>}
                       </div>
@@ -1216,8 +1444,20 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
           </Card>
         ))
       )}
+      {totalThreads > threadPageSize && (
+        <StandardPagination
+          currentPage={safePage}
+          totalPages={totalPages}
+          totalItems={totalThreads}
+          itemsPerPage={threadPageSize}
+          onPageChange={setThreadPage}
+          onPageSizeChange={(s) => { setThreadPageSize(s); setThreadPage(1); }}
+          entityName="threads"
+        />
+      )}
     </div>
-  );
+    );
+  };
 
   const showLogActivity = !isCampaignEnded && (outreachTab === "linkedin" || outreachTab === "call");
   const showSendEmail = !isCampaignEnded && outreachTab === "email";
@@ -1343,8 +1583,8 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
                     {thread.accountName && (
                       <p className="text-[11px] text-muted-foreground truncate mb-0.5">{thread.accountName}</p>
                     )}
-                    <p className="text-xs text-foreground/80 truncate font-medium">
-                      {thread.threadLabel}
+                    <p className="text-xs text-muted-foreground truncate">
+                      {thread.previewText}
                     </p>
                     <div className="flex items-center gap-1.5 mt-1">
                       {thread.hasReply && (
@@ -1418,10 +1658,11 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
                   </div>
                 </div>
 
-                {/* Messages — oldest to newest, expandable */}
+                {/* Messages — newest first, latest expanded by default */}
                 <div className="flex-1 overflow-y-auto divide-y">
                   {selectedThread.messages.map((msg: any) => {
-                    const isExpanded = expandedMessages.has(msg.id);
+                    const isLatest = selectedThread.messages[0]?.id === msg.id;
+                    const isExpanded = isLatest || expandedMessages.has(msg.id);
                     const showQuoted = expandedMessages.has(`${msg.id}-quoted`);
                     const showError = expandedMessages.has(`${msg.id}-error`);
                     const isInbound = msg.kind === "inbound-reply";
@@ -1440,7 +1681,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
                     const initial = (senderLabel || "?").trim().charAt(0).toUpperCase();
 
                     return (
-                      <div key={msg.id} className={isInbound ? "bg-primary/5" : isFailed ? "bg-destructive/5" : ""}>
+                      <div key={msg.id} className={isInbound ? "border-l-2 border-l-primary bg-primary/5" : isFailed ? "border-l-2 border-l-destructive bg-destructive/5" : ""}>
                         {/* Header row — always visible, click to toggle */}
                         <button
                           type="button"
@@ -1609,7 +1850,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
   const hasCallStats = callStats.interested + callStats.notInterested + callStats.callLater + callStats.noAnswer > 0;
 
   const hasAnyFilter =
-    searchTerm !== "" || accountFilter !== "all" || contactFilter !== "all" || ownerFilter !== "all" ||
+    searchTerm !== "" || accountFilter !== "all" || contactFilter !== "all" || ownerFilter !== "all" || segmentFilter !== "all" ||
     (outreachTab === "email" && emailStatusFilter !== "all") ||
     (outreachTab === "linkedin" && linkedinStatusFilter !== "all") ||
     (outreachTab === "call" && callStatusFilter !== "all");
@@ -1619,6 +1860,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
     setAccountFilter("all");
     setContactFilter("all");
     setOwnerFilter("all");
+    setSegmentFilter("all");
     setEmailStatusFilter("all");
     setLinkedinStatusFilter("all");
     setCallStatusFilter("all");
@@ -1648,44 +1890,97 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
 
   return (
     <div className="space-y-2">
+      <SendJobPanel campaignId={campaignId} />
       <Tabs value={outreachTab} onValueChange={(v) => setOutreachTab(v as OutreachTab)}>
         {/* Industry-standard toolbar layout:
             LEFT:  [Channel tabs] [Search] [Contact] [Account] [Owner] [Status chips]
             RIGHT: [Clear] [View switch] [Synced · refresh] [Primary Action] [Ended] */}
         <div className="flex flex-wrap items-center gap-2">
-          <TabsList className="h-7">
-            {enableEmail && (
-              <TabsTrigger value="email" className="text-xs h-6 px-2.5 gap-1.5">
-                <Mail className="h-3 w-3" /> Email
-                <span className="tabular-nums text-muted-foreground">{reachableCounts.email}/{campaignContacts.length}</span>
-              </TabsTrigger>
-            )}
-            {enableLinkedIn && (
-              <TabsTrigger value="linkedin" className="text-xs h-6 px-2.5 gap-1.5">
-                <Linkedin className="h-3 w-3" /> LinkedIn
-                <span className="tabular-nums text-muted-foreground">{reachableCounts.linkedin}/{campaignContacts.length}</span>
-              </TabsTrigger>
-            )}
-            {enablePhone && (
-              <TabsTrigger value="call" className="text-xs h-6 px-2.5 gap-1.5">
-                <Phone className="h-3 w-3" /> Phone
-                <span className="tabular-nums text-muted-foreground">{reachableCounts.phone}/{campaignContacts.length}</span>
-              </TabsTrigger>
-            )}
-          </TabsList>
+          {(Number(!!enableEmail) + Number(!!enableLinkedIn) + Number(!!enablePhone)) > 1 && (
+            <TabsList className="h-7">
+              {enableEmail && (
+                <TabsTrigger value="email" className="text-xs h-6 px-2.5 gap-1.5">
+                  <Mail className="h-3 w-3" /> Email
+                  <span className="tabular-nums text-muted-foreground">{reachableCounts.email}/{campaignContacts.length}</span>
+                </TabsTrigger>
+              )}
+              {enableLinkedIn && (
+                <TabsTrigger value="linkedin" className="text-xs h-6 px-2.5 gap-1.5">
+                  <Linkedin className="h-3 w-3" /> LinkedIn
+                  <span className="tabular-nums text-muted-foreground">{reachableCounts.linkedin}/{campaignContacts.length}</span>
+                </TabsTrigger>
+              )}
+              {enablePhone && (
+                <TabsTrigger value="call" className="text-xs h-6 px-2.5 gap-1.5">
+                  <Phone className="h-3 w-3" /> Phone
+                  <span className="tabular-nums text-muted-foreground">{reachableCounts.phone}/{campaignContacts.length}</span>
+                </TabsTrigger>
+              )}
+            </TabsList>
+          )}
 
-          {renderFilterControls()}
-
-          {/* Per-channel status chips inline with filters */}
-          {outreachTab === "email" && hasEmailStats && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              <StatusChip label="All" count={emailComms.length} active={emailStatusFilter === "all"} onClick={() => setEmailStatusFilter("all")} />
-              <StatusChip label="Sent" count={emailStats.sent} active={emailStatusFilter === "sent"} onClick={() => setEmailStatusFilter(emailStatusFilter === "sent" ? "all" : "sent")} />
-              <StatusChip label="Replied" count={emailStats.replied} active={emailStatusFilter === "replied"} onClick={() => setEmailStatusFilter(emailStatusFilter === "replied" ? "all" : "replied")} tone="success" />
-              <StatusChip label="Failed" count={emailStats.failed} active={emailStatusFilter === "failed"} onClick={() => setEmailStatusFilter(emailStatusFilter === "failed" ? "all" : "failed")} tone="destructive" />
-              <StatusChip label="Bounced" count={emailStats.bounced} active={emailStatusFilter === "bounced"} onClick={() => setEmailStatusFilter(emailStatusFilter === "bounced" ? "all" : "bounced")} tone="warning" />
+          {viewMode && onViewModeChange && (
+            <div className="inline-flex h-7 items-center rounded-md border bg-muted/40 p-0.5 text-xs">
+              <button
+                type="button"
+                onClick={() => onViewModeChange("outreach")}
+                className={`px-2 h-6 rounded-sm transition-colors ${viewMode === "outreach" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Outreach
+              </button>
+              <button
+                type="button"
+                onClick={() => onViewModeChange("analytics")}
+                className={`px-2 h-6 rounded-sm transition-colors ${viewMode === "analytics" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                Analytics
+              </button>
             </div>
           )}
+
+          {campaignSegments.length > 0 && (
+            <Select value={segmentFilter} onValueChange={setSegmentFilter}>
+              <SelectTrigger className="h-7 text-xs w-auto min-w-[140px] max-w-[200px] gap-1">
+                <SelectValue placeholder="Segment" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-xs">All audience</SelectItem>
+                {campaignSegments.map((s: any) => (
+                  <SelectItem key={s.id} value={s.id} className="text-xs">{s.segment_name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {/* Per-channel status chips inline with filters */}
+          {outreachTab === "email" && hasEmailStats && (() => {
+            // Compute counts for "Not Replied" and "Needs Follow-up" from already-built threads.
+            const allEmailThreads = threads.filter((t: any) => t?.threadType === "email");
+            const notRepliedCount = allEmailThreads.filter((t: any) => {
+              const hasOutbound = t.messages?.some((m: any) => (m.sent_via || "manual") !== "graph-sync");
+              return hasOutbound && !t.hasReply;
+            }).length;
+            const needsFollowupCount = allEmailThreads.filter((t: any) => {
+              if (t.hasReply) return false;
+              const outbound = (t.messages || []).filter((m: any) => (m.sent_via || "manual") !== "graph-sync");
+              if (outbound.length === 0) return false;
+              const latestOut = outbound.reduce((acc: any, m: any) =>
+                new Date(m.communication_date || 0) > new Date(acc.communication_date || 0) ? m : acc, outbound[0]);
+              const ageDays = (Date.now() - new Date(latestOut.communication_date || 0).getTime()) / (1000 * 60 * 60 * 24);
+              return ageDays >= followUpWaitDays;
+            }).length;
+            return (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <StatusChip label="All" count={emailComms.length} active={emailStatusFilter === "all"} onClick={() => setEmailStatusFilter("all")} />
+                <StatusChip label="Sent" count={emailStats.sent} active={emailStatusFilter === "sent"} onClick={() => setEmailStatusFilter(emailStatusFilter === "sent" ? "all" : "sent")} />
+                <StatusChip label="Replied" count={emailStats.replied} active={emailStatusFilter === "replied"} onClick={() => setEmailStatusFilter(emailStatusFilter === "replied" ? "all" : "replied")} tone="success" />
+                <StatusChip label="Not Replied" count={notRepliedCount} active={emailStatusFilter === "notReplied"} onClick={() => setEmailStatusFilter(emailStatusFilter === "notReplied" ? "all" : "notReplied")} />
+                <StatusChip label={`Needs Follow-up (${followUpWaitDays}d)`} count={needsFollowupCount} active={emailStatusFilter === "needsFollowup"} onClick={() => setEmailStatusFilter(emailStatusFilter === "needsFollowup" ? "all" : "needsFollowup")} tone="warning" />
+                <StatusChip label="Failed" count={emailStats.failed} active={emailStatusFilter === "failed"} onClick={() => setEmailStatusFilter(emailStatusFilter === "failed" ? "all" : "failed")} tone="destructive" />
+                <StatusChip label="Bounced" count={emailStats.bounced} active={emailStatusFilter === "bounced"} onClick={() => setEmailStatusFilter(emailStatusFilter === "bounced" ? "all" : "bounced")} tone="warning" />
+              </div>
+            );
+          })()}
           {outreachTab === "linkedin" && hasLinkedinStats && (
             <div className="flex flex-wrap items-center gap-1.5">
               <StatusChip label="All" count={linkedinComms.length} active={linkedinStatusFilter === "all"} onClick={() => setLinkedinStatusFilter("all")} />
@@ -1712,60 +2007,16 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
           )}
 
           <div className="flex items-center gap-2 ml-auto flex-shrink-0">
-            {viewMode && onViewModeChange && (
-              <div className="inline-flex h-7 items-center rounded-md border bg-muted/40 p-0.5 text-xs">
-                <button
-                  type="button"
-                  onClick={() => onViewModeChange("outreach")}
-                  className={`px-2 h-6 rounded-sm transition-colors ${viewMode === "outreach" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                >
-                  Outreach
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onViewModeChange("analytics")}
-                  className={`px-2 h-6 rounded-sm transition-colors ${viewMode === "analytics" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                >
-                  Analytics
-                </button>
-              </div>
-            )}
             <SyncStatusPill
               lastSyncedAt={lastSyncedAt}
-              isSyncing={isSyncing}
-              onRetry={() => syncReplies(true)}
+              isSyncing={isSyncing || isResyncing}
+              onRetry={() => {
+                const composite = selectedThreadKey || "";
+                const parts = composite.split("::");
+                const contactScope = parts.length === 2 && parts[1] && parts[1] !== "no-contact" ? parts[1] : undefined;
+                void runResync(contactScope);
+              }}
             />
-            {outreachTab === "email" && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground gap-1"
-                onClick={() => syncReplies(true)}
-                disabled={isSyncing}
-                title="Refresh email replies"
-              >
-                <RefreshCw className={`h-3 w-3 ${isSyncing ? "animate-spin" : ""}`} />
-              </Button>
-            )}
-            {outreachTab === "email" && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-2 text-xs gap-1"
-                onClick={() => {
-                  // Scope: if a thread is open, restrict to that thread's contact.
-                  const composite = selectedThreadKey || "";
-                  const parts = composite.split("::");
-                  const contactScope = parts.length === 2 && parts[1] && parts[1] !== "no-contact" ? parts[1] : undefined;
-                  void runResync(contactScope);
-                }}
-                disabled={isResyncing || isSyncing}
-                title={selectedThreadKey ? "Re-sync replies for the open thread's contact" : "Re-sync replies for the whole campaign"}
-              >
-                <RefreshCw className={`h-3 w-3 ${isResyncing ? "animate-spin" : ""}`} />
-                Re-sync replies
-              </Button>
-            )}
             {showSendEmail && (
               <TooltipProvider>
                 <Tooltip>
@@ -1775,7 +2026,8 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
                         size="sm"
                         variant="default"
                         className="h-7 gap-1"
-                        disabled={emailableContacts.length === 0}
+                        disabled={isReadOnly || emailableContacts.length === 0}
+                        title={isReadOnly ? "Campaign is Completed — read-only" : undefined}
                         onClick={() => {
                           setReplyContext(undefined);
                           setEmailComposeOpen(true);
@@ -1809,7 +2061,8 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
                             size="sm"
                             variant="outline"
                             className="h-7"
-                            disabled={reach === 0}
+                            disabled={isReadOnly || reach === 0}
+                            title={isReadOnly ? "Campaign is Completed — read-only" : undefined}
                             onClick={() => openLogModal(outreachTab === "linkedin" ? "LinkedIn" : "Call")}
                           >
                             <Plus className="h-3.5 w-3.5 mr-1" />
@@ -1833,22 +2086,12 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, viewMode, 
             )}
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          {renderFilterControls()}
+        </div>
 
         {/* EMAIL TAB — always threaded */}
         <TabsContent value="email" className="mt-2 space-y-2">
-          <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border bg-muted/30 text-[11px] text-muted-foreground">
-            <Mail className="h-3 w-3 text-primary" />
-            <span>
-              Reaching <span className="font-semibold text-foreground tabular-nums">{reachableCounts.email}</span> of{" "}
-              <span className="tabular-nums">{campaignContacts.length}</span> campaign contacts via Email
-              {emailStats.bounced > 0 && (
-                <> · <span className="text-destructive font-medium tabular-nums">{emailStats.bounced} bounced</span></>
-              )}
-              {emailStats.replied > 0 && (
-                <> · <span className="text-emerald-600 dark:text-emerald-400 font-medium tabular-nums">{emailStats.replied} replied</span></>
-              )}
-            </span>
-          </div>
           {emailThreadsFiltered.length === 0 && hasAnyFilter ? (
             <div className="text-center py-8">
               <p className="text-sm text-muted-foreground">No emails match the current filters.</p>

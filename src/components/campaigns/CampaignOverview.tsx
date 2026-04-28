@@ -24,10 +24,12 @@ import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, Tooltip as 
 import {
   getOutreachCounts,
   getRepliedThreads,
+  getFunnel,
 } from "./overviewMetrics";
 import { RecentActivityPanel } from "./overview/RecentActivityPanel";
 import { EngagementHeatmap } from "./overview/EngagementHeatmap";
-import { UpcomingTasks } from "./overview/UpcomingTasks";
+import { UpcomingActionItems } from "./overview/UpcomingActionItems";
+import { getEnabledChannels, pickDrilldownChannel } from "./channelVisibility";
 
 interface StrategyComplete {
   message: boolean;
@@ -96,6 +98,13 @@ export function CampaignOverview({
 
   const drill = (d: Parameters<NonNullable<Props["onDrilldown"]>>[0]) =>
     onDrilldown ? onDrilldown(d) : onTabChange((d as any).tab);
+
+  // Channel visibility — single source of truth for what to render.
+  const enabledChannels = useMemo(() => getEnabledChannels(campaign), [campaign?.enabled_channels, campaign?.primary_channel]);
+  const showEmailCh = enabledChannels.includes("Email");
+  const showPhoneCh = enabledChannels.includes("Phone");
+  const showLinkedInCh = enabledChannels.includes("LinkedIn");
+  const defaultDrilldownChannel = useMemo(() => pickDrilldownChannel(campaign), [campaign?.enabled_channels, campaign?.primary_channel]);
 
   // ---------- Unified metrics ----------
   const outreach = useMemo(() => getOutreachCounts(communications), [communications]);
@@ -173,16 +182,22 @@ export function CampaignOverview({
   };
 
   // Health
-  const totalDealValue = deals.reduce(
+  // Use the canonical "won deal value" so Avg € matches the Deals page (excludes Lost).
+  const winningDeals = deals.filter((d: any) => d.stage !== "Lost");
+  const totalDealValue = winningDeals.reduce(
     (sum: number, d: any) => sum + (Number(d.total_contract_value) || 0),
     0
   );
+  // Coverage uses the canonical unique-touched-contact count (matches funnel).
   const coveragePct =
     contacts.length > 0
-      ? Math.round((contactedContactIds.size / contacts.length) * 100)
+      ? Math.round((outreach.uniqueTouchedContacts / contacts.length) * 100)
       : 0;
+  // Touches per CONTACTED contact (not per total contacts) — far more meaningful.
   const avgTouches =
-    contacts.length > 0 ? (outreach.total / contacts.length).toFixed(1) : "0.0";
+    contactedContactIds.size > 0
+      ? (outreach.total / contactedContactIds.size).toFixed(1)
+      : "0.0";
 
   const today = new Date();
   const startDate = campaign.start_date ? new Date(campaign.start_date) : null;
@@ -194,10 +209,23 @@ export function CampaignOverview({
   const timeProgressPct =
     totalDays > 0 ? Math.min(100, Math.round((elapsedDays / totalDays) * 100)) : 0;
 
+  // Reply rate aligned with Analytics tab: replied threads / outbound threads.
   const responseRate =
-    contactedContactIds.size > 0
-      ? Math.round((repliedContactIds.size / contactedContactIds.size) * 100)
+    outreach.emailThreads > 0
+      ? Math.round((repliedThreads.length / outreach.emailThreads) * 100)
       : 0;
+
+  // Funnel-driven Lead→Deal % so Overview matches Analytics & Funnel widget.
+  const funnel = useMemo(
+    () => getFunnel(contacts, communications, deals),
+    [contacts, communications, deals]
+  );
+  const leadToDealPct =
+    funnel.responded > 0
+      ? Math.round((funnel.converted / funnel.responded) * 100)
+      : 0;
+  const avgDealValue =
+    winningDeals.length > 0 ? totalDealValue / winningDeals.length : 0;
 
   // Top engaged accounts
   const topAccounts = useMemo(() => {
@@ -221,11 +249,11 @@ export function CampaignOverview({
       .slice(0, 5);
   }, [accounts, communications]);
 
-  // Activity timeline (30-day daily)
+  // Outreach timeline (last 14 days, daily)
   const timelineData = useMemo(() => {
     const today = startOfDay(new Date());
-    const days = Array.from({ length: 30 }, (_, i) =>
-      startOfDay(subDays(today, 29 - i))
+    const days = Array.from({ length: 14 }, (_, i) =>
+      startOfDay(subDays(today, 13 - i))
     );
     return days.map((day) => {
       const next = subDays(day, -1);
@@ -357,14 +385,35 @@ export function CampaignOverview({
       label: "Outreach",
       value: outreach.total,
       icon: MessageSquare,
-      sub: `${outreach.emailThreads}✉ ${outreach.calls}☎ ${outreach.linkedin}in`,
+      subNode: (
+        <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground tabular-nums">
+          {showEmailCh && (
+            <span className="inline-flex items-center gap-0.5" title="Email threads">
+              <Mail className="h-2.5 w-2.5" />
+              {outreach.emailThreads}
+            </span>
+          )}
+          {showPhoneCh && (
+            <span className="inline-flex items-center gap-0.5" title="Calls">
+              <Phone className="h-2.5 w-2.5" />
+              {outreach.calls}
+            </span>
+          )}
+          {showLinkedInCh && (
+            <span className="inline-flex items-center gap-0.5" title="LinkedIn">
+              <Linkedin className="h-2.5 w-2.5" />
+              {outreach.linkedin}
+            </span>
+          )}
+        </span>
+      ),
       onClick: () =>
-        drill({ tab: "monitoring", view: "outreach", channel: "email", status: "all" }),
+        drill({ tab: "monitoring", view: "outreach", channel: defaultDrilldownChannel, status: "all" }),
       borderClass: "border-l-indigo-500",
       iconBg: "bg-indigo-100 dark:bg-indigo-900/40",
       iconColor: "text-indigo-600 dark:text-indigo-300",
       spark: outreachSpark,
-      sparkColor: "hsl(231 48% 55%)",
+      sparkColor: "hsl(var(--channel-email))",
     },
     {
       label: "Responses",
@@ -375,20 +424,31 @@ export function CampaignOverview({
         drill({
           tab: "monitoring",
           view: "outreach",
-          channel: "email",
+          channel: defaultDrilldownChannel,
           status: "replied",
         }),
       borderClass: "border-l-amber-500",
       iconBg: "bg-amber-100 dark:bg-amber-900/40",
       iconColor: "text-amber-600 dark:text-amber-300",
       spark: responseSpark,
-      sparkColor: "hsl(38 92% 50%)",
+      sparkColor: "hsl(var(--channel-call))",
     },
     {
       label: "Deals",
       value: deals.length,
       icon: BarChart3,
-      sub: totalDealValue > 0 ? `€${(totalDealValue / 1000).toFixed(0)}k` : "—",
+      subNode: (
+        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0 text-[10px] text-muted-foreground tabular-nums">
+          {avgDealValue > 0 && <span>€{(avgDealValue / 1000).toFixed(0)}k avg</span>}
+          {leadToDealPct > 0 && (
+            <>
+              {avgDealValue > 0 && <span className="opacity-50">·</span>}
+              <span>{leadToDealPct}% L→D</span>
+            </>
+          )}
+          {avgDealValue === 0 && leadToDealPct === 0 && <span>—</span>}
+        </span>
+      ),
       onClick: () => navigate(`/deals?campaign=${campaign.id}`),
       borderClass: "border-l-emerald-500",
       iconBg: "bg-emerald-100 dark:bg-emerald-900/40",
@@ -396,9 +456,9 @@ export function CampaignOverview({
     },
   ];
 
-  // Channel performance rows
+  // Channel performance rows — only enabled channels.
   const channelRows = [
-    {
+    showEmailCh && {
       key: "Email" as const,
       icon: Mail,
       sent: outreach.emailThreads,
@@ -407,7 +467,7 @@ export function CampaignOverview({
       onClick: () =>
         drill({ tab: "monitoring", view: "outreach", channel: "email", status: "all" }),
     },
-    {
+    showPhoneCh && {
       key: "Call" as const,
       icon: Phone,
       sent: outreach.calls,
@@ -422,7 +482,7 @@ export function CampaignOverview({
       onClick: () =>
         drill({ tab: "monitoring", view: "outreach", channel: "call", status: "all" }),
     },
-    {
+    showLinkedInCh && {
       key: "LinkedIn" as const,
       icon: Linkedin,
       sent: outreach.linkedin,
@@ -434,7 +494,14 @@ export function CampaignOverview({
       onClick: () =>
         drill({ tab: "monitoring", view: "outreach", channel: "linkedin", status: "all" }),
     },
-  ];
+  ].filter(Boolean) as Array<{
+    key: "Email" | "Call" | "LinkedIn";
+    icon: any;
+    sent: number;
+    replied: number;
+    spark: { v: number }[];
+    onClick: () => void;
+  }>;
 
   
 
@@ -467,11 +534,13 @@ export function CampaignOverview({
                     <p className="text-xl font-bold leading-tight tabular-nums">
                       {k.value}
                     </p>
-                    {k.sub && (
+                    {(k as any).subNode ? (
+                      <div className="mt-0.5">{(k as any).subNode}</div>
+                    ) : (k as any).sub ? (
                       <p className="text-[10px] text-muted-foreground truncate">
-                        {k.sub}
+                        {(k as any).sub}
                       </p>
-                    )}
+                    ) : null}
                   </div>
                   <div className="flex flex-col items-end gap-1">
                     <div
@@ -503,17 +572,18 @@ export function CampaignOverview({
         })}
       </div>
 
-      {/* Rows 2-4: Recent Activity (left, spans all rows) + nested right column */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-        {/* Left: Recent Activity (sticky tall sidebar) */}
-        <div className="lg:col-span-4">
+      {/* Row 2: 3-column main grid — Recent Activity | Next Action + Channels | Health + Top Engaged */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+        {/* Recent Activity (left) */}
+        <div className="lg:col-span-4 flex">
           <RecentActivityPanel
             communications={communications}
+            enabledChannels={enabledChannels}
             onOpenThread={(threadId) =>
               drill({
                 tab: "monitoring",
                 view: "outreach",
-                channel: "email",
+                channel: defaultDrilldownChannel,
                 status: "all",
                 threadId,
               })
@@ -522,334 +592,311 @@ export function CampaignOverview({
               drill({
                 tab: "monitoring",
                 view: "outreach",
-                channel: "email",
+                channel: defaultDrilldownChannel,
                 status: "all",
               })
             }
-            onOpenCall={() =>
-              drill({ tab: "monitoring", view: "outreach", channel: "call", status: "all" })
+            onOpenCall={
+              showPhoneCh
+                ? () =>
+                    drill({ tab: "monitoring", view: "outreach", channel: "call", status: "all" })
+                : undefined
             }
-            onOpenLinkedIn={() =>
-              drill({ tab: "monitoring", view: "outreach", channel: "linkedin", status: "all" })
+            onOpenLinkedIn={
+              showLinkedInCh
+                ? () =>
+                    drill({ tab: "monitoring", view: "outreach", channel: "linkedin", status: "all" })
+                : undefined
             }
           />
         </div>
 
-        {/* Right column: 4 rows of paired cards */}
-        <div className="lg:col-span-8 flex flex-col gap-3">
-          {/* Right Row A: Next Action + Channel Performance */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* Next Best Action */}
-            <Card>
-              <CardContent className="p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <Target className="h-3.5 w-3.5 text-primary" />
-                  <h3 className="text-xs font-semibold uppercase tracking-wider">
-                    Next Action
-                  </h3>
-                </div>
-                <ul className="flex flex-col gap-1.5">
-                  {nextActions.map((a) => {
-                    const Icon = a.icon;
-                    return (
-                      <li key={a.id}>
-                        <button
-                          onClick={a.onClick}
-                          className="w-full flex items-start gap-2 p-1.5 rounded-md hover:bg-primary/5 text-left group"
-                        >
-                          <Icon className="h-3 w-3 text-primary mt-0.5 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[11px] font-medium leading-tight truncate">
-                              {a.label}
-                            </p>
-                            <p className="text-[10px] text-primary group-hover:underline flex items-center gap-0.5">
-                              {a.cta} <ArrowRight className="h-2.5 w-2.5" />
-                            </p>
-                          </div>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </CardContent>
-            </Card>
-
-            {/* Channel Performance */}
-            <Card>
-              <CardContent className="p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                  <h3 className="text-xs font-semibold uppercase tracking-wider">
-                    Channel Performance
-                  </h3>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  {channelRows.map((ch) => {
-                    const Icon = ch.icon;
-                    const rate = ch.sent > 0 ? Math.round((ch.replied / ch.sent) * 100) : 0;
-                    return (
+        {/* Middle column: Next Action (top) + Channel Performance (bottom) */}
+        <div className="lg:col-span-4 flex flex-col gap-3">
+          <Card className="flex-1">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Target className="h-3.5 w-3.5 text-primary" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider">
+                  Next Action
+                </h3>
+              </div>
+              <ul className="flex flex-col gap-1.5">
+                {nextActions.map((a) => {
+                  const Icon = a.icon;
+                  return (
+                    <li key={a.id}>
                       <button
-                        key={ch.key}
-                        onClick={ch.onClick}
-                        className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 text-[11px] hover:bg-muted/40 rounded px-1 py-1"
+                        onClick={a.onClick}
+                        className="w-full flex items-start gap-2 p-1.5 rounded-md hover:bg-primary/5 text-left group"
                       >
-                        <Icon className="h-3.5 w-3.5 text-primary shrink-0" />
-                        <span className="text-left font-medium truncate">{ch.key}</span>
-                        <span className="text-right tabular-nums text-muted-foreground">
-                          {ch.replied}/{ch.sent}
-                        </span>
-                        <span className="w-10 text-right tabular-nums font-semibold">
-                          {ch.sent > 0 ? `${rate}%` : "—"}
-                        </span>
+                        <Icon className="h-3 w-3 text-primary mt-0.5 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[11px] font-medium leading-tight truncate">
+                            {a.label}
+                          </p>
+                          <p className="text-[10px] text-primary group-hover:underline flex items-center gap-0.5">
+                            {a.cta} <ArrowRight className="h-2.5 w-2.5" />
+                          </p>
+                        </div>
                       </button>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </CardContent>
+          </Card>
 
-          {/* Right Row B: Top Engaged + Health */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* Top Engaged */}
-            <Card>
-              <CardContent className="p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <Trophy className="h-3.5 w-3.5 text-amber-500" />
-                  <h3 className="text-xs font-semibold uppercase tracking-wider">
-                    Top Engaged
-                  </h3>
-                </div>
-                {topAccounts.length === 0 ? (
-                  <p className="text-[11px] text-muted-foreground py-2 text-center">
-                    No engagement
-                  </p>
-                ) : (
-                  <ul className="flex flex-col gap-1">
-                    {topAccounts.map((a) => (
+          <Card className="flex-1">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider">
+                  Channel Performance
+                </h3>
+              </div>
+              <div className="flex flex-col gap-1">
+                {(() => {
+                  const active = channelRows.filter((c) => c.sent > 0);
+                  const inactive = channelRows.filter((c) => c.sent === 0);
+                  const rows = active.length > 0 ? active : channelRows;
+                  return (
+                    <>
+                      {rows.map((ch) => {
+                        const Icon = ch.icon;
+                        const rate =
+                          ch.sent > 0 ? Math.round((ch.replied / ch.sent) * 100) : 0;
+                        const replyLabel = ch.key === "Email" ? "Reply" : "Positive";
+                        return (
+                          <button
+                            key={ch.key}
+                            onClick={ch.onClick}
+                            className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 text-[11px] hover:bg-muted/40 rounded px-1 py-1"
+                            title={`${replyLabel}: ${ch.replied} of ${ch.sent}`}
+                          >
+                            <Icon className="h-3.5 w-3.5 text-primary shrink-0" />
+                            <span className="text-left font-medium truncate">
+                              {ch.key}
+                            </span>
+                            <span className="text-right tabular-nums text-muted-foreground">
+                              {ch.replied}/{ch.sent}
+                            </span>
+                            <span className="w-10 text-right tabular-nums font-semibold">
+                              {ch.sent > 0 ? `${rate}%` : "—"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                      {active.length > 0 && inactive.length > 0 && (
+                        <p className="text-[10px] text-muted-foreground/70 px-1 pt-0.5">
+                          Inactive: {inactive.map((c) => c.key).join(", ")}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Right column: Health (top) + Top Engaged (bottom) */}
+        <div className="lg:col-span-4 flex flex-col gap-3">
+          <Card className="flex-1">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <HeartPulse className="h-3.5 w-3.5 text-muted-foreground" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider">
+                  Health
+                </h3>
+              </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => drill({ tab: "setup", section: "timing" })}
+                  className="text-left hover:opacity-80"
+                  title={
+                    startDate && endDate
+                      ? `${format(startDate, "d MMM")} → ${format(endDate, "d MMM yyyy")}`
+                      : "Set start & end dates"
+                  }
+                >
+                  <div className="flex items-center justify-between text-[10px] mb-0.5">
+                    <span className="text-muted-foreground">Time</span>
+                    <span className="tabular-nums font-medium">
+                      {endDate ? `${elapsedDays}/${totalDays}d` : "—"}
+                    </span>
+                  </div>
+                  <div className="h-1 rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 rounded-full"
+                      style={{ width: `${timeProgressPct}%` }}
+                    />
+                  </div>
+                </button>
+                <button
+                  onClick={() =>
+                    drill({
+                      tab: "setup",
+                      section: "audience",
+                      audienceView: "contacts",
+                    })
+                  }
+                  className="text-left hover:opacity-80"
+                  title={`${outreach.uniqueTouchedContacts} of ${contacts.length} contacts touched`}
+                >
+                  <div className="flex items-center justify-between text-[10px] mb-0.5">
+                    <span className="text-muted-foreground">Coverage</span>
+                    <span className="tabular-nums font-medium">{coveragePct}%</span>
+                  </div>
+                  <div className="h-1 rounded-full bg-muted overflow-hidden">
+                    <div
+                      className="h-full bg-emerald-500 rounded-full"
+                      style={{ width: `${coveragePct}%` }}
+                    />
+                  </div>
+                </button>
+                <button
+                  onClick={() =>
+                    drill({ tab: "monitoring", view: "outreach", channel: "email", status: "all" })
+                  }
+                  className="flex items-center justify-between text-[10px] pt-0.5 hover:opacity-80"
+                  title="Average outreach touches per contacted contact"
+                >
+                  <span className="text-muted-foreground">Touches / contact</span>
+                  <span className="tabular-nums font-medium">{avgTouches}</span>
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="flex-1">
+            <CardContent className="p-3">
+              <div className="flex items-center gap-2 mb-2">
+                <Trophy className="h-3.5 w-3.5 text-amber-500" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider">
+                  Top Engaged
+                </h3>
+              </div>
+              {topAccounts.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground py-2 text-center">
+                  No engagement
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {topAccounts.map((a) => {
+                    const total = a.touches + a.replies;
+                    const rate =
+                      total > 0 ? Math.round((a.replies / total) * 100) : 0;
+                    return (
                       <li key={a.id}>
                         <button
-                          onClick={() =>
-                            navigate(`/accounts?accountId=${a.id}`)
-                          }
-                          className="w-full flex items-center justify-between gap-1 text-[11px] hover:bg-muted/40 rounded px-1 py-0.5"
-                          title={`Open ${a.name}`}
+                          onClick={() => navigate(`/accounts?accountId=${a.id}`)}
+                          className="w-full flex items-center justify-between gap-2 text-[11px] hover:bg-muted/40 rounded px-1 py-0.5"
+                          title={`${a.name} — ${a.replies} replies / ${a.touches} touches (${rate}%)`}
                         >
-                          <span className="truncate text-left" title={a.name}>
-                            {a.name}
-                          </span>
-                          <span className="tabular-nums shrink-0">
+                          <span className="truncate text-left flex-1">{a.name}</span>
+                          <span className="tabular-nums shrink-0 flex items-center gap-1">
                             <span className="text-amber-600 dark:text-amber-400 font-semibold">
                               {a.replies}
                             </span>
                             <span className="text-muted-foreground/60">
                               /{a.touches}
                             </span>
+                            <span className="text-[10px] text-muted-foreground w-7 text-right">
+                              {rate}%
+                            </span>
                           </span>
                         </button>
                       </li>
-                    ))}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Health */}
-            <Card>
-              <CardContent className="p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <HeartPulse className="h-3.5 w-3.5 text-muted-foreground" />
-                  <h3 className="text-xs font-semibold uppercase tracking-wider">
-                    Health
-                  </h3>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <button
-                    onClick={() => drill({ tab: "setup", section: "timing" })}
-                    className="text-left hover:opacity-80"
-                  >
-                    <div className="flex items-center justify-between text-[10px] mb-0.5">
-                      <span className="text-muted-foreground">Time</span>
-                      <span className="tabular-nums font-medium">
-                        {endDate ? `${daysRemaining}d` : "—"}
-                      </span>
-                    </div>
-                    <div className="h-1 rounded-full bg-muted overflow-hidden">
-                      <div
-                        className="h-full bg-blue-500 rounded-full"
-                        style={{ width: `${timeProgressPct}%` }}
-                      />
-                    </div>
-                  </button>
-                  <button
-                    onClick={() =>
-                      drill({
-                        tab: "setup",
-                        section: "audience",
-                        audienceView: "contacts",
-                      })
-                    }
-                    className="text-left hover:opacity-80"
-                  >
-                    <div className="flex items-center justify-between text-[10px] mb-0.5">
-                      <span className="text-muted-foreground">Coverage</span>
-                      <span className="tabular-nums font-medium">{coveragePct}%</span>
-                    </div>
-                    <div className="h-1 rounded-full bg-muted overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-500 rounded-full"
-                        style={{ width: `${coveragePct}%` }}
-                      />
-                    </div>
-                  </button>
-                  <button
-                    onClick={() =>
-                      drill({ tab: "monitoring", view: "outreach", channel: "email", status: "all" })
-                    }
-                    className="flex items-center justify-between text-[10px] pt-0.5 hover:opacity-80"
-                  >
-                    <span className="text-muted-foreground">Touches</span>
-                    <span className="tabular-nums font-medium">{avgTouches}</span>
-                  </button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Right Row C: Conversion + Engagement Heatmap */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-            {/* Conversion */}
-            <div className="md:col-span-5">
-              <Card className="h-full">
-                <CardContent className="p-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <TrendingUp className="h-3.5 w-3.5 text-muted-foreground" />
-                    <h3 className="text-xs font-semibold uppercase tracking-wider">
-                      Conversion
-                    </h3>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      onClick={() =>
-                        drill({
-                          tab: "monitoring",
-                          view: "outreach",
-                          channel: "email",
-                          status: "replied",
-                        })
-                      }
-                      className="text-left hover:bg-muted/40 rounded p-1"
-                    >
-                      <p className="text-[9px] uppercase text-muted-foreground">Reply</p>
-                      <p className="text-base font-bold tabular-nums leading-none">
-                        {responseRate}
-                        <span className="text-[10px] text-muted-foreground">%</span>
-                      </p>
-                    </button>
-                    <button
-                      onClick={() => navigate(`/deals?campaign=${campaign.id}`)}
-                      className="text-left hover:bg-muted/40 rounded p-1"
-                    >
-                      <p className="text-[9px] uppercase text-muted-foreground">
-                        Lead→Deal
-                      </p>
-                      <p className="text-base font-bold tabular-nums leading-none">
-                        {repliedContactIds.size > 0
-                          ? Math.round((deals.length / repliedContactIds.size) * 100)
-                          : 0}
-                        <span className="text-[10px] text-muted-foreground">%</span>
-                      </p>
-                    </button>
-                    <button
-                      onClick={() => navigate(`/deals?campaign=${campaign.id}`)}
-                      className="text-left hover:bg-muted/40 rounded p-1"
-                    >
-                      <p className="text-[9px] uppercase text-muted-foreground">Avg €</p>
-                      <p className="text-base font-bold tabular-nums leading-none">
-                        {deals.length > 0
-                          ? `€${(totalDealValue / deals.length / 1000).toFixed(0)}k`
-                          : "—"}
-                      </p>
-                    </button>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-            {/* Engagement Heatmap */}
-            <div className="md:col-span-7">
-              <EngagementHeatmap
-                communications={communications}
-                onCellClick={() =>
-                  drill({ tab: "monitoring", view: "outreach", channel: "email", status: "all" })
-                }
-              />
-            </div>
-          </div>
-
-          {/* Right Row D: Activity Timeline + Upcoming Tasks */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-            {/* Activity Timeline (30-day daily) */}
-            <div className="md:col-span-7">
-              <Card className="h-full">
-                <CardContent className="p-3">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                    <h3 className="text-xs font-semibold uppercase tracking-wider">
-                      Activity Timeline
-                    </h3>
-                    <span className="ml-auto text-[10px] text-muted-foreground">
-                      Last 30 days
-                    </span>
-                  </div>
-                  <div className="h-36">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={timelineData}
-                        margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
-                        onClick={(e: any) => {
-                          if (!e || !e.activeLabel) return;
-                          drill({
-                            tab: "monitoring",
-                            view: "outreach",
-                            channel: "email",
-                            status: "all",
-                          });
-                        }}
-                      >
-                        <XAxis
-                          dataKey="date"
-                          tick={{ fontSize: 9 }}
-                          axisLine={false}
-                          tickLine={false}
-                          interval={4}
-                        />
-                        <RTooltip
-                          contentStyle={{
-                            fontSize: 11,
-                            borderRadius: 6,
-                            border: "1px solid hsl(var(--border))",
-                            background: "hsl(var(--background))",
-                          }}
-                        />
-                        <Bar dataKey="Email" stackId="a" fill="hsl(231 48% 55%)" />
-                        <Bar dataKey="Call" stackId="a" fill="hsl(142 71% 45%)" />
-                        <Bar dataKey="LinkedIn" stackId="a" fill="hsl(266 85% 58%)" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-            {/* Upcoming Tasks */}
-            <div className="md:col-span-5">
-              <UpcomingTasks
-                campaignId={campaign.id}
-                onOpenTasks={() => onTabChange("actionItems")}
-              />
-            </div>
-          </div>
+                    );
+                  })}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </div>
+
+      {/* Row 3: Outreach Timeline + Upcoming Action Items */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+        <div className="lg:col-span-8 flex">
+          <Card className="flex-1">
+            <CardContent className="p-3 h-full flex flex-col">
+              <div className="flex items-center gap-2 mb-2">
+                <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                <h3 className="text-xs font-semibold uppercase tracking-wider">
+                  Outreach Timeline
+                </h3>
+                <span className="ml-auto text-[10px] text-muted-foreground">
+                  Last 14 days
+                </span>
+              </div>
+              <div className="h-32 flex-1">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={timelineData}
+                    margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                    onClick={(e: any) => {
+                      if (!e || !e.activeLabel) return;
+                      drill({
+                        tab: "monitoring",
+                        view: "outreach",
+                        channel: "email",
+                        status: "all",
+                      });
+                    }}
+                  >
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 9 }}
+                      axisLine={false}
+                      tickLine={false}
+                      interval={1}
+                    />
+                    <RTooltip
+                      contentStyle={{
+                        fontSize: 11,
+                        borderRadius: 6,
+                        border: "1px solid hsl(var(--border))",
+                        background: "hsl(var(--background))",
+                      }}
+                    />
+                    {showEmailCh && <Bar dataKey="Email" stackId="a" fill="hsl(var(--channel-email))" />}
+                    {showPhoneCh && <Bar dataKey="Call" stackId="a" fill="hsl(var(--channel-call))" />}
+                    {showLinkedInCh && <Bar dataKey="LinkedIn" stackId="a" fill="hsl(var(--channel-linkedin))" />}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        <div className="lg:col-span-4 flex">
+          <UpcomingActionItems
+            campaignId={campaign.id}
+            onOpenActionItems={() => onTabChange("actionItems")}
+          />
+        </div>
+      </div>
+
+      {/* Row 4: collapsible Reply Heatmap (hidden by default to save space) */}
+      <details className="group rounded-lg border bg-card">
+        <summary className="cursor-pointer list-none flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground select-none">
+          <Activity className="h-3.5 w-3.5" />
+          Send-time analysis
+          <span className="ml-auto text-[10px] font-normal normal-case">
+            Click to expand
+          </span>
+        </summary>
+        <div className="p-3 pt-0">
+          <EngagementHeatmap
+            communications={communications}
+            enabledChannels={enabledChannels}
+            onCellClick={() =>
+              drill({ tab: "monitoring", view: "outreach", channel: defaultDrilldownChannel, status: "all" })
+            }
+          />
+        </div>
+      </details>
     </div>
   );
 }

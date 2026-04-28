@@ -7,6 +7,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { Loader2, User, Shield, Bell } from 'lucide-react';
 import ProfileSection from './account/ProfileSection';
+import EmailSignatureCard from './account/EmailSignatureCard';
 import SecuritySection from './account/SecuritySection';
 import NotificationsSection from './account/NotificationsSection';
 
@@ -254,6 +255,11 @@ const AccountSettingsPage = () => {
               </Button>
             </div>
           )}
+          <EmailSignatureCard
+            userId={user?.id || ''}
+            fullName={profile.full_name}
+            email={profile.email}
+          />
         </TabsContent>
 
         <TabsContent value="security" className="mt-6">

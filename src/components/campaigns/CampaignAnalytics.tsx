@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,20 +23,26 @@ import {
   BarChart, Bar,
 } from "recharts";
 import { format, subDays, isAfter, startOfDay } from "date-fns";
+import { VariantPerformancePanel } from "./VariantPerformancePanel";
+import { CampaignAttributionPanel } from "./CampaignAttributionPanel";
+import { getEnabledChannels } from "./channelVisibility";
 
 interface Props {
   campaignId: string;
+  /** Optional — when provided, channel-aware UI is enabled. */
+  campaign?: any;
 }
 
 // ────────────────────────── Design tokens ──────────────────────────
 const CHART = {
-  primary:  "hsl(var(--primary))",
-  success:  "hsl(142 71% 45%)",   // emerald
-  call:     "hsl(38 92% 50%)",    // amber
-  linkedin: "hsl(258 90% 66%)",   // violet
-  failed:   "hsl(0 84% 60%)",     // rose
-  neutral:  "hsl(215 16% 47%)",   // slate
-  opened:   "hsl(199 89% 48%)",   // sky
+  // C12: theme-aware tokens (auto light/dark) defined in index.css
+  primary:  "hsl(var(--channel-email))",
+  success:  "hsl(var(--channel-success))",
+  call:     "hsl(var(--channel-call))",
+  linkedin: "hsl(var(--channel-linkedin))",
+  failed:   "hsl(var(--channel-failed))",
+  neutral:  "hsl(var(--channel-neutral))",
+  opened:   "hsl(var(--channel-opened))",
 } as const;
 
 const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -137,20 +143,46 @@ function RateRow({ label, num, den, color, hint }: { label: string; num: number;
   );
 }
 
-function EmptyHint({ icon: Icon, message }: { icon: any; message: string }) {
+function EmptyHint({ icon: Icon, message, ctaLabel, onCta }: { icon: any; message: string; ctaLabel?: string; onCta?: () => void }) {
   return (
     <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
       <Icon className="h-8 w-8 mb-2 opacity-50" />
       <p className="text-xs">{message}</p>
+      {ctaLabel && onCta && (
+        <button
+          type="button"
+          onClick={onCta}
+          className="mt-3 text-xs text-primary hover:underline"
+        >
+          {ctaLabel} →
+        </button>
+      )}
     </div>
   );
 }
 
 // ────────────────────────── Main ──────────────────────────
-export function CampaignAnalytics({ campaignId }: Props) {
+export function CampaignAnalytics({ campaignId, campaign }: Props) {
   const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<DateRange>("all");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("all");
+
+  // Channel visibility
+  const enabledChannels = useMemo(() => getEnabledChannels(campaign), [campaign?.enabled_channels, campaign?.primary_channel]);
+  const showEmailCh = enabledChannels.includes("Email");
+  const showCallCh = enabledChannels.includes("Phone");
+  const showLinkedInCh = enabledChannels.includes("LinkedIn");
+
+  // Reset channel filter if its channel is disabled.
+  useEffect(() => {
+    if (channelFilter === "all") return;
+    const stillEnabled =
+      (channelFilter === "email" && showEmailCh) ||
+      (channelFilter === "call" && showCallCh) ||
+      (channelFilter === "linkedin" && showLinkedInCh);
+    if (!stillEnabled) setChannelFilter("all");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEmailCh, showCallCh, showLinkedInCh]);
 
   const { data: accounts = [] } = useQuery({
     queryKey: ["campaign-accounts", campaignId, "analytics"],
@@ -183,7 +215,7 @@ export function CampaignAnalytics({ campaignId }: Props) {
     queryFn: async () => {
     const { data, error } = await supabase
         .from("campaign_communications")
-        .select("*, opened_at, open_count, last_opened_at, tracking_id, contacts(contact_name), accounts(account_name, region, industry)")
+        .select("*, opened_at, open_count, last_opened_at, tracking_id, template_id, contacts(contact_name), accounts(account_name, region, industry)")
         .eq("campaign_id", campaignId)
         .order("communication_date", { ascending: false });
       if (error) throw error;
@@ -218,6 +250,20 @@ export function CampaignAnalytics({ campaignId }: Props) {
         .from("email_history")
         .select("id, recipient_email, sender_email, sent_at, status, opened_at, replied_at, bounced_at, open_count, unique_opens, reply_count")
         .in("recipient_email", contactEmails);
+      if (error) throw error;
+      return data as any[];
+    },
+    staleTime: 60_000, gcTime: 5 * 60_000,
+  });
+
+  // Template metadata for the per-template performance panel
+  const { data: templates = [] } = useQuery({
+    queryKey: ["campaign-templates-meta", campaignId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("campaign_email_templates")
+        .select("id, template_name, email_type")
+        .eq("campaign_id", campaignId);
       if (error) throw error;
       return data as any[];
     },
@@ -363,12 +409,12 @@ export function CampaignAnalytics({ campaignId }: Props) {
   // ───── Channel mix donut ─────
   const channelData = useMemo(() => {
     const data = [
-      { name: "Email",    value: filteredComms.filter(c => c.communication_type === "Email").length,    fill: CHART.primary },
-      { name: "Call",     value: callStats.total,    fill: CHART.call },
-      { name: "LinkedIn", value: linkedInStats.total, fill: CHART.linkedin },
-    ].filter(d => d.value > 0);
-    return data;
-  }, [filteredComms, callStats.total, linkedInStats.total]);
+      showEmailCh && { name: "Email",    value: filteredComms.filter(c => c.communication_type === "Email").length, fill: CHART.primary },
+      showCallCh && { name: "Call",     value: callStats.total,    fill: CHART.call },
+      showLinkedInCh && { name: "LinkedIn", value: linkedInStats.total, fill: CHART.linkedin },
+    ].filter(Boolean) as { name: string; value: number; fill: string }[];
+    return data.filter(d => d.value > 0);
+  }, [filteredComms, callStats.total, linkedInStats.total, showEmailCh, showCallCh, showLinkedInCh]);
 
   // ───── Timeline (stacked area) ─────
   const timelineData = useMemo(() => {
@@ -418,6 +464,59 @@ export function CampaignAnalytics({ campaignId }: Props) {
       responses: heatmap.grid[i].reduce((s, v) => s + v, 0),
     }));
   }, [heatmap]);
+
+  // ───── Best send-time histogram (Email sends bucketed by hour-of-day) ─────
+  const sendTimeBuckets = useMemo(() => {
+    const buckets: { label: string; sends: number; replies: number }[] = TIME_BUCKETS.map(b => ({
+      label: b.label, sends: 0, replies: 0,
+    }));
+    const provider = filteredComms.filter(isProviderSent);
+    provider.forEach((c: any) => {
+      if (!c.communication_date) return;
+      const h = new Date(c.communication_date).getHours();
+      const idx = TIME_BUCKETS.findIndex(b => h >= b.range[0] && h < b.range[1]);
+      if (idx >= 0) buckets[idx].sends++;
+    });
+    // Map replies back to the send time of the parent message when possible
+    const inboundConvIds = new Set(
+      filteredComms.filter(isInbound).map((c: any) => c.conversation_id).filter(Boolean)
+    );
+    provider.forEach((c: any) => {
+      if (!c.communication_date) return;
+      if (!c.conversation_id || !inboundConvIds.has(c.conversation_id)) return;
+      const h = new Date(c.communication_date).getHours();
+      const idx = TIME_BUCKETS.findIndex(b => h >= b.range[0] && h < b.range[1]);
+      if (idx >= 0) buckets[idx].replies++;
+    });
+    return buckets;
+  }, [filteredComms]);
+
+  // ───── Per-template performance ─────
+  const templatePerf = useMemo(() => {
+    const nameById = new Map<string, string>();
+    (templates as any[]).forEach(t => nameById.set(t.id, t.template_name || "(unnamed)"));
+    const agg: Record<string, { id: string; name: string; sent: number; opened: number; replied: number; bounced: number }> = {};
+    const provider = filteredComms.filter(isProviderSent);
+    const repliedConvIds = new Set(
+      filteredComms.filter(isInbound).map((c: any) => c.conversation_id).filter(Boolean)
+    );
+    provider.forEach((c: any) => {
+      const tid = c.template_id || "__none__";
+      if (!agg[tid]) {
+        agg[tid] = {
+          id: tid,
+          name: tid === "__none__" ? "Ad-hoc / no template" : (nameById.get(tid) || "(deleted template)"),
+          sent: 0, opened: 0, replied: 0, bounced: 0,
+        };
+      }
+      const row = agg[tid];
+      row.sent++;
+      if (c.opened_at || (c.open_count ?? 0) > 0) row.opened++;
+      if (c.conversation_id && repliedConvIds.has(c.conversation_id)) row.replied++;
+      if (isBounce(c)) row.bounced++;
+    });
+    return Object.values(agg).sort((a, b) => b.sent - a.sent);
+  }, [filteredComms, templates]);
 
   // ───── Breakdowns ─────
   const breakdownByRegion = useMemo(() => {
@@ -529,15 +628,20 @@ export function CampaignAnalytics({ campaignId }: Props) {
             </SelectContent>
           </Select>
           <div className="hidden md:inline-flex h-8 items-center rounded-md border bg-muted/40 p-0.5 text-xs">
-            {(["all", "email", "call", "linkedin"] as ChannelFilter[]).map(c => (
-              <button
-                key={c}
-                onClick={() => setChannelFilter(c)}
-                className={`px-2.5 h-7 rounded-sm capitalize transition-colors ${channelFilter === c ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-              >
-                {c === "all" ? "All channels" : c}
-              </button>
-            ))}
+            {(["all", "email", "call", "linkedin"] as ChannelFilter[])
+              .filter(c => c === "all"
+                || (c === "email" && showEmailCh)
+                || (c === "call" && showCallCh)
+                || (c === "linkedin" && showLinkedInCh))
+              .map(c => (
+                <button
+                  key={c}
+                  onClick={() => setChannelFilter(c)}
+                  className={`px-2.5 h-7 rounded-sm capitalize transition-colors ${channelFilter === c ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {c === "all" ? "All channels" : c}
+                </button>
+              ))}
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
@@ -673,7 +777,16 @@ export function CampaignAnalytics({ campaignId }: Props) {
         </CardHeader>
         <CardContent className="p-4 pt-2">
           {emailStats.sent === 0 && emailStats.manualLogged === 0 ? (
-            <EmptyHint icon={Mail} message="No emails sent yet" />
+            <EmptyHint
+              icon={Mail}
+              message="No emails sent yet"
+              ctaLabel="Send your first email"
+              onCta={() => {
+                const params = new URLSearchParams(window.location.search);
+                params.set("tab", "monitoring");
+                window.location.search = params.toString();
+              }}
+            />
           ) : (
             <div className="space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
@@ -726,9 +839,9 @@ export function CampaignAnalytics({ campaignId }: Props) {
                   <XAxis dataKey="week" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                   <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
                   <RechartsTooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid hsl(var(--border))", background: "hsl(var(--background))" }} />
-                  <Area type="monotone" dataKey="Email" stackId="1" stroke={CHART.primary} fill={CHART.primary} fillOpacity={0.35} strokeWidth={2} />
-                  <Area type="monotone" dataKey="Call" stackId="1" stroke={CHART.call} fill={CHART.call} fillOpacity={0.35} strokeWidth={2} />
-                  <Area type="monotone" dataKey="LinkedIn" stackId="1" stroke={CHART.linkedin} fill={CHART.linkedin} fillOpacity={0.35} strokeWidth={2} />
+                  {showEmailCh && <Area type="monotone" dataKey="Email" stackId="1" stroke={CHART.primary} fill={CHART.primary} fillOpacity={0.35} strokeWidth={2} />}
+                  {showCallCh && <Area type="monotone" dataKey="Call" stackId="1" stroke={CHART.call} fill={CHART.call} fillOpacity={0.35} strokeWidth={2} />}
+                  {showLinkedInCh && <Area type="monotone" dataKey="LinkedIn" stackId="1" stroke={CHART.linkedin} fill={CHART.linkedin} fillOpacity={0.35} strokeWidth={2} />}
                   <Legend iconSize={8} formatter={(v: string) => <span className="text-xs text-muted-foreground">{v}</span>} />
                 </AreaChart>
               </ResponsiveContainer>
@@ -831,6 +944,96 @@ export function CampaignAnalytics({ campaignId }: Props) {
           </Tabs>
         </CardContent>
       </Card>
+
+      {/* ZONE E2 — Send-time histogram */}
+      <Card className="border-border/60 shadow-sm">
+        <CardHeader className="p-4 pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Clock className="h-4 w-4 text-primary" /> Best Send Time
+            <span className="text-[10px] text-muted-foreground font-normal">
+              {sendTimeBuckets.reduce((s, b) => s + b.sends, 0)} sends
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-4 pt-2">
+          {sendTimeBuckets.every(b => b.sends === 0) ? (
+            <EmptyHint icon={Clock} message="No provider-sent emails yet" />
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={sendTimeBuckets} margin={{ left: 0, right: 8, top: 4, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+                <RechartsTooltip
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid hsl(var(--border))", background: "hsl(var(--background))" }}
+                  formatter={(v: number, n: string) => [v, n === "sends" ? "Sends" : "Replied threads"]}
+                />
+                <Legend iconSize={8} formatter={(v: string) => <span className="text-xs text-muted-foreground">{v === "sends" ? "Sends" : "Replied"}</span>} />
+                <Bar dataKey="sends" fill={CHART.primary} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="replies" fill={CHART.success} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ZONE E3 — Template performance */}
+      <Card className="border-border/60 shadow-sm">
+        <CardHeader className="p-4 pb-2">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Mail className="h-4 w-4 text-primary" /> Template Performance
+            <span className="text-[10px] text-muted-foreground font-normal">
+              {templatePerf.length} template{templatePerf.length === 1 ? "" : "s"} used
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-4 pt-2">
+          {templatePerf.length === 0 ? (
+            <EmptyHint icon={Mail} message="No template-attributed sends yet" />
+          ) : (
+            <div className="space-y-1">
+              <div className="grid grid-cols-12 gap-2 text-[10px] text-muted-foreground uppercase tracking-wide font-medium px-1">
+                <div className="col-span-5">Template</div>
+                <div className="col-span-1 text-right">Sent</div>
+                <div className="col-span-2 text-right">Open rate</div>
+                <div className="col-span-2 text-right">Reply rate</div>
+                <div className="col-span-2 text-right">Bounce rate</div>
+              </div>
+              {templatePerf.map(t => {
+                const openRate = pct(t.opened, t.sent);
+                const replyRate = pct(t.replied, t.sent);
+                const bounceRate = pct(t.bounced, t.sent);
+                return (
+                  <div key={t.id} className="grid grid-cols-12 gap-2 items-center text-xs px-1 py-1 rounded hover:bg-muted/30">
+                    <div className="col-span-5 truncate font-medium" title={t.name}>{t.name}</div>
+                    <div className="col-span-1 text-right tabular-nums">{t.sent}</div>
+                    <div className="col-span-2 text-right tabular-nums">
+                      <span style={{ color: CHART.opened }}>{openRate}%</span>
+                      <span className="text-muted-foreground"> ({t.opened})</span>
+                    </div>
+                    <div className="col-span-2 text-right tabular-nums">
+                      <span style={{ color: CHART.success }}>{replyRate}%</span>
+                      <span className="text-muted-foreground"> ({t.replied})</span>
+                    </div>
+                    <div className="col-span-2 text-right tabular-nums">
+                      <span style={{ color: bounceRate > 5 ? CHART.failed : "hsl(var(--muted-foreground))" }}>
+                        {bounceRate}%
+                      </span>
+                      <span className="text-muted-foreground"> ({t.bounced})</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ZONE F — A/B variant performance */}
+      <VariantPerformancePanel campaignId={campaignId} />
+
+      {/* ZONE G — Conversion attribution */}
+      <CampaignAttributionPanel campaignId={campaignId} />
     </div>
   );
 }

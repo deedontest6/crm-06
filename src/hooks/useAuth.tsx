@@ -144,8 +144,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     getInitialSession();
 
+    // Safety net: never let the auth gate hang forever. If neither the
+    // listener nor getSession() resolves within 5s (slow network, broken
+    // Supabase response, etc.), force loading=false so the app shell can
+    // render and route the user to /auth instead of an infinite spinner.
+    const safetyTimer = setTimeout(() => {
+      if (mounted && !sessionFetched) {
+        console.warn('[auth] session restore timed out after 5s — releasing loading state');
+        setLoading(false);
+      }
+    }, 5000);
+
     return () => {
       mounted = false;
+      clearTimeout(safetyTimer);
       subscription.unsubscribe();
     };
   }, []); // Empty dependency array to prevent re-running

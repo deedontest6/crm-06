@@ -3,8 +3,10 @@ import { ReactNode } from "react";
 import { AppSidebar } from "./AppSidebar";
 import { NotificationBell } from "./NotificationBell";
 import { Button } from "./ui/button";
-import { User, LogOut } from "lucide-react";
+import { User, LogOut, Loader2, MapPin } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { useLocation } from "react-router-dom";
+import { useIsFetching } from "@tanstack/react-query";
 
 interface CRMLayoutProps {
   children: ReactNode;
@@ -12,6 +14,10 @@ interface CRMLayoutProps {
 
 export const CRMLayout = ({ children }: CRMLayoutProps) => {
   const { user, signOut } = useAuth();
+  const location = useLocation();
+  const fetchingCount = useIsFetching();
+  const isFetching = fetchingCount > 0;
+  const routeLabel = location.pathname + (location.search || "");
 
   return (
     <div className="min-h-screen bg-background flex">
@@ -21,6 +27,25 @@ export const CRMLayout = ({ children }: CRMLayoutProps) => {
         <header className="bg-white border-b border-border px-6 py-4 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-4">
             <h1 className="text-xl font-semibold text-foreground">CRM Dashboard</h1>
+            <div
+              className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded-md bg-muted/60 border border-border text-xs text-muted-foreground max-w-[420px]"
+              title={isFetching ? `Loading data… (${fetchingCount} request${fetchingCount === 1 ? "" : "s"})` : "Idle"}
+            >
+              <MapPin className="h-3 w-3 shrink-0" />
+              <span className="truncate font-mono">{routeLabel}</span>
+              <span className="mx-1 h-3 w-px bg-border" />
+              {isFetching ? (
+                <span className="flex items-center gap-1 text-primary">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Fetching {fetchingCount}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-emerald-600">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  Idle
+                </span>
+              )}
+            </div>
           </div>
           
           <div className="flex items-center gap-4">

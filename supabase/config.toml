@@ -2,3 +2,40 @@ project_id = "nreslricievaamrwfrlx"
 
 [functions.email-skip-report]
 verify_jwt = true
+
+[functions.unsubscribe]
+verify_jwt = false
+
+[functions.email-track]
+verify_jwt = false
+
+[functions.classify-reply-intent]
+verify_jwt = true
+
+# ── Cron-invoked functions ───────────────────────────────────────
+# These are called by pg_cron using the `x-cron-secret` shared secret
+# (see _campaign_cron_headers() in the Phase A migration). They must
+# accept anonymous requests so the in-function CAMPAIGN_CRON_SECRET
+# check is the actual gate.
+
+[functions.check-email-replies]
+verify_jwt = false
+
+[functions.campaign-follow-up-runner]
+verify_jwt = false
+
+[functions.campaign-follow-up-dryrun]
+verify_jwt = false
+
+[functions.ab-winner-evaluator]
+verify_jwt = false
+
+[functions.campaign-send-job-runner]
+verify_jwt = false
+
+[functions.enqueue-campaign-send]
+verify_jwt = false
+
+
+[functions.process-automation-triggers]
+verify_jwt = false

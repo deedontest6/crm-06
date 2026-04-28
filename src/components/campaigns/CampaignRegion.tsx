@@ -4,7 +4,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useCampaigns, type Campaign } from "@/hooks/useCampaigns";
 import { useState, useMemo, useEffect } from "react";
 import { Globe, Plus, Pencil, Trash2, Building2, Users, MoreHorizontal } from "lucide-react";
-import { regions, countries, countryToRegion, getCountriesForRegion, getFormattedTimezoneList, getTimezonesForCountry, getTimezoneLabel, expandRegionsForDb } from "@/utils/countryRegionMapping";
+import { regions, countries, countryToRegion, getCountriesForRegion, getFormattedTimezoneList, getTimezonesForCountry, getTimezoneLabel } from "@/utils/countryRegionMapping";
+import { fetchScopedAccounts, fetchScopedContactsForAccounts } from "@/utils/campaignAudienceScope";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent, DropdownMenuPortal } from "@/components/ui/dropdown-menu";
 import { useQuery } from "@tanstack/react-query";
@@ -39,7 +40,9 @@ interface Props {
 }
 
 export function CampaignRegion({ campaign }: Props) {
-  const { updateCampaign } = useCampaigns();
+  // Pass enableLists:false — on the detail page we only need the mutation,
+  // not the full campaigns list (which would re-fire the list waterfall).
+  const { updateCampaign } = useCampaigns({ enableLists: false });
   const [regionCards, setRegionCards] = useState<RegionCard[]>(() => parseRegions(campaign));
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -55,28 +58,26 @@ export function CampaignRegion({ campaign }: Props) {
     () => Array.from(new Set(regionCards.map(r => r.region).filter(Boolean))),
     [regionCards]
   );
+  const selectedCountryNames = useMemo(
+    () => Array.from(new Set(regionCards.map(r => r.country).filter(Boolean))),
+    [regionCards]
+  );
 
-  // Live counts of accounts/contacts in selected regions
+  // Live counts of accounts/contacts in selected regions/countries — uses the
+  // SAME scope helper as the Add Audience modal so the two views always agree.
   const { data: counts } = useQuery({
-    queryKey: ["region-audience-counts", selectedRegionNames.join(",")],
+    queryKey: ["region-audience-counts", selectedRegionNames.join(","), selectedCountryNames.join(",")],
     queryFn: async () => {
-      if (selectedRegionNames.length === 0) return { accounts: 0, contacts: 0 };
-      const codes = expandRegionsForDb(selectedRegionNames);
-      const [{ count: accountCount }, { data: regionAccounts }] = await Promise.all([
-        supabase.from("accounts").select("id", { count: "exact", head: true }).in("region", codes),
-        supabase.from("accounts").select("account_name").in("region", codes),
-      ]);
-      let contactCount = 0;
-      if (regionAccounts && regionAccounts.length > 0) {
-        const names = regionAccounts.map((a: any) => a.account_name).filter(Boolean);
-        if (names.length > 0) {
-          const { count } = await supabase.from("contacts").select("id", { count: "exact", head: true }).in("company_name", names);
-          contactCount = count || 0;
-        }
+      if (selectedRegionNames.length === 0 && selectedCountryNames.length === 0) {
+        return { accounts: 0, contacts: 0 };
       }
-      return { accounts: accountCount || 0, contacts: contactCount };
+      const accounts = await fetchScopedAccounts(selectedRegionNames, selectedCountryNames);
+      const contacts = await fetchScopedContactsForAccounts(accounts);
+      return { accounts: accounts.length, contacts: contacts.length };
     },
-    enabled: selectedRegionNames.length > 0,
+    enabled: selectedRegionNames.length > 0 || selectedCountryNames.length > 0,
+    staleTime: 30_000,
+    placeholderData: { accounts: 0, contacts: 0 },
   });
 
   const filteredCountries = useMemo(() => {
@@ -163,8 +164,14 @@ export function CampaignRegion({ campaign }: Props) {
     setSaving(true);
     let notes = campaign.notes || "";
     notes = notes.replace(/\[timezone:.+?\]\s*/g, "").trim();
+    // Persist ALL distinct countries (comma-joined) to campaigns.country, not just the first.
+    // Multiple region cards may share a region but target different countries — all need to be
+    // discoverable for downstream filters and template region matching.
+    const countryList = Array.from(
+      new Set(regs.map(r => (r.country || "").trim()).filter(Boolean))
+    ).join(", ");
     updateCampaign.mutate(
-      { id: campaign.id, region: JSON.stringify(regs), country: regs[0]?.country || null, notes },
+      { id: campaign.id, region: JSON.stringify(regs), country: countryList || null, notes: notes || null },
       { onSettled: () => setSaving(false) }
     );
   };
@@ -179,12 +186,17 @@ export function CampaignRegion({ campaign }: Props) {
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
           <Globe className="h-3.5 w-3.5" />
-          <span><span className="font-medium text-foreground">{regionCards.length === 0 ? 0 : selectedRegionNames.length}</span> region{selectedRegionNames.length === 1 ? "" : "s"}</span>
-          <span>· <span className="font-medium text-foreground">{regionCards.length}</span> countr{regionCards.length === 1 ? "y" : "ies"}</span>
+          <span><span className="font-medium text-foreground">{selectedRegionNames.length}</span> region{selectedRegionNames.length === 1 ? "" : "s"}</span>
+          {(() => {
+            const cc = regionCards.filter(r => r.country).length;
+            return (
+              <span>· <span className="font-medium text-foreground">{cc}</span> countr{cc === 1 ? "y" : "ies"}</span>
+            );
+          })()}
           {selectedRegionNames.length > 0 && (
             <>
-              <span className="flex items-center gap-1">· <Building2 className="h-3 w-3" /><span className="font-medium text-foreground">{counts?.accounts ?? "…"}</span> accounts</span>
-              <span className="flex items-center gap-1">· <Users className="h-3 w-3" /><span className="font-medium text-foreground">{counts?.contacts ?? "…"}</span> contacts</span>
+              <span className="flex items-center gap-1">· <Building2 className="h-3 w-3" /><span className="font-medium text-foreground">{counts?.accounts ?? 0}</span> accounts</span>
+              <span className="flex items-center gap-1">· <Users className="h-3 w-3" /><span className="font-medium text-foreground">{counts?.contacts ?? 0}</span> contacts</span>
             </>
           )}
         </div>
@@ -214,7 +226,7 @@ export function CampaignRegion({ campaign }: Props) {
         <p className="text-xs text-muted-foreground">No regions defined yet. Add regions to specify geographic targeting.</p>
       )}
 
-      <div className="space-y-1.5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
         {Object.entries(
           regionCards.reduce<Record<string, { card: RegionCard; index: number }[]>>((acc, card, idx) => {
             const key = card.region || "(no region)";
@@ -222,7 +234,7 @@ export function CampaignRegion({ campaign }: Props) {
             return acc;
           }, {})
         ).map(([regionName, group]) => (
-          <div key={regionName} className="border border-border rounded-md px-3 py-2">
+          <div key={regionName} className="group/region border border-border rounded-md px-2.5 py-1.5">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 text-sm font-medium">
@@ -245,38 +257,38 @@ export function CampaignRegion({ campaign }: Props) {
                   </div>
                 )}
               </div>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0">
-                    <MoreHorizontal className="h-3.5 w-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => openAddCountryToRegion(regionName)}>
-                    <Plus className="h-3.5 w-3.5 mr-2" /> Add country
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    className="text-destructive"
-                    onClick={() => {
-                      // delete all cards in this region
-                      const updated = regionCards.filter(c => c.region !== regionName);
-                      setRegionCards(updated);
-                      persistRegions(updated);
-                    }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 mr-2" /> Delete region
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <div className="flex items-center gap-0.5 opacity-0 group-hover/region:opacity-100 transition-opacity shrink-0">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  title="Add country"
+                  onClick={() => openAddCountryToRegion(regionName)}
+                >
+                  <Plus className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  title="Delete region"
+                  onClick={() => {
+                    const updated = regionCards.filter(c => c.region !== regionName);
+                    setRegionCards(updated);
+                    persistRegions(updated);
+                  }}
+                >
+                  <Trash2 className="h-3 w-3 text-muted-foreground" />
+                </Button>
+              </div>
             </div>
           </div>
         ))}
       </div>
 
       {formOpen && (
-        <div className="border border-border rounded-md p-2.5 space-y-2 bg-muted/30">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="border-t border-border pt-2 space-y-2">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <div className="space-y-1.5">
               <Label className="text-xs">Region *</Label>
               <Select value={form.region} onValueChange={handleRegionChange}>

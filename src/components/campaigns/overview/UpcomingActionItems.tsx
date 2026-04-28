@@ -6,16 +6,13 @@ import { format, differenceInDays, parseISO } from "date-fns";
 
 interface Props {
   campaignId: string;
-  onOpenTasks: () => void;
+  onOpenActionItems: () => void;
 }
 
-export function UpcomingTasks({ campaignId, onOpenTasks }: Props) {
-  const { data: tasks = [] } = useQuery({
-    queryKey: ["campaign-upcoming-tasks", campaignId],
+export function UpcomingActionItems({ campaignId, onOpenActionItems }: Props) {
+  const { data: items = [] } = useQuery({
+    queryKey: ["campaign-upcoming-action-items", campaignId],
     queryFn: async () => {
-      const today = new Date();
-      const in14 = new Date();
-      in14.setDate(today.getDate() + 14);
       const { data, error } = await supabase
         .from("action_items")
         .select("id, title, status, priority, due_date, assigned_to")
@@ -53,31 +50,31 @@ export function UpcomingTasks({ campaignId, onOpenTasks }: Props) {
 
   return (
     <Card className="h-full">
-      <CardContent className="p-3">
+      <CardContent className="p-3 h-full flex flex-col">
         <div className="flex items-center gap-2 mb-2">
           <ListChecks className="h-3.5 w-3.5 text-muted-foreground" />
           <h3 className="text-xs font-semibold uppercase tracking-wider">
-            Upcoming Tasks
+            Upcoming Action Items
           </h3>
           <button
-            onClick={onOpenTasks}
+            onClick={onOpenActionItems}
             className="ml-auto text-[11px] text-primary hover:underline flex items-center gap-1"
           >
             <Plus className="h-3 w-3" /> Open
           </button>
         </div>
-        {tasks.length === 0 ? (
-          <p className="text-xs text-muted-foreground py-6 text-center">
-            No upcoming tasks
+        {items.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-6 text-center flex-1">
+            No upcoming action items
           </p>
         ) : (
-          <ul className="flex flex-col gap-1">
-            {tasks.map((t: any) => {
+          <ul className="flex flex-col gap-1 flex-1 overflow-auto">
+            {items.map((t: any) => {
               const p = pill(t.due_date);
               return (
                 <li
                   key={t.id}
-                  onClick={onOpenTasks}
+                  onClick={onOpenActionItems}
                   className="flex items-center gap-2 text-[11px] hover:bg-muted/40 rounded px-1.5 py-1 cursor-pointer"
                 >
                   <span

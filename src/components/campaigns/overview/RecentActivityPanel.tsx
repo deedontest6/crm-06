@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Inbox,
@@ -29,6 +29,8 @@ interface Item {
 
 interface Props {
   communications: any[];
+  /** Channels enabled for the campaign — controls visible chips and item types. */
+  enabledChannels?: Array<"Email" | "Phone" | "LinkedIn">;
   onOpenThread: (threadId: string) => void;
   onOpenAll: () => void;
   onOpenCall?: (contactId?: string | null) => void;
@@ -61,6 +63,7 @@ const statusClass = (s: Item["status"]) => {
 
 export function RecentActivityPanel({
   communications,
+  enabledChannels,
   onOpenThread,
   onOpenAll,
   onOpenCall,
@@ -68,38 +71,47 @@ export function RecentActivityPanel({
 }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
 
+  // Resolve channel visibility flags. Default to all-enabled for back-compat.
+  const showEmail = !enabledChannels || enabledChannels.includes("Email");
+  const showCall = !enabledChannels || enabledChannels.includes("Phone");
+  const showLinkedIn = !enabledChannels || enabledChannels.includes("LinkedIn");
+
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
-    // Email threads
-    const threads = getEmailThreads(communications);
-    threads.forEach((t) => {
-      const last = t.messages[t.messages.length - 1];
-      const status: Item["status"] = t.hasReply
-        ? "Replied"
-        : t.hasFailed
-        ? "Failed"
-        : t.messages.some((m: any) => m.opened_at)
-        ? "Opened"
-        : "Sent";
-      out.push({
-        key: `email-${t.threadId}`,
-        type: "Email",
-        contactName: last?.contacts?.contact_name || "Unknown",
-        accountName: last?.accounts?.account_name || "",
-        subject: t.subject || "Email",
-        msgCount: t.messages.length,
-        status,
-        date: t.lastDate,
-        threadId: t.threadId,
-        contactId: t.contactId,
+    // Email threads — only when Email channel is enabled.
+    if (showEmail) {
+      const threads = getEmailThreads(communications);
+      threads.forEach((t) => {
+        const last = t.messages[t.messages.length - 1];
+        const status: Item["status"] = t.hasReply
+          ? "Replied"
+          : t.hasFailed
+          ? "Failed"
+          : t.messages.some((m: any) => m.opened_at)
+          ? "Opened"
+          : "Sent";
+        out.push({
+          key: `email-${t.threadId}`,
+          type: "Email",
+          contactName: last?.contacts?.contact_name || "Unknown",
+          accountName: last?.accounts?.account_name || "",
+          subject: t.subject || "Email",
+          msgCount: t.messages.length,
+          status,
+          date: t.lastDate,
+          threadId: t.threadId,
+          contactId: t.contactId,
+        });
       });
-    });
-    // Calls + LinkedIn rows
+    }
+    // Calls + LinkedIn rows — drop entries whose channel is disabled.
     communications.forEach((c: any) => {
       if (c.communication_type === "Email") return;
       const type =
         c.communication_type === "Phone" ? "Call" : c.communication_type;
       if (type !== "Call" && type !== "LinkedIn") return;
+      if (type === "Call" && !showCall) return;
+      if (type === "LinkedIn" && !showLinkedIn) return;
       out.push({
         key: `${type}-${c.id}`,
         type: type as "Call" | "LinkedIn",
@@ -123,7 +135,14 @@ export function RecentActivityPanel({
           new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
       )
       .slice(0, 50);
-  }, [communications]);
+  }, [communications, showEmail, showCall, showLinkedIn]);
+
+  // Reset filter if its channel becomes disabled.
+  useEffect(() => {
+    if (filter === "email" && !showEmail) setFilter("all");
+    else if (filter === "call" && !showCall) setFilter("all");
+    else if (filter === "linkedin" && !showLinkedIn) setFilter("all");
+  }, [filter, showEmail, showCall, showLinkedIn]);
 
   const filtered = items.filter((i) => {
     if (filter === "all") return true;
@@ -136,31 +155,31 @@ export function RecentActivityPanel({
 
   const chips: { id: Filter; label: string; count: number }[] = [
     { id: "all", label: "All", count: items.length },
-    {
-      id: "email",
+    showEmail && {
+      id: "email" as const,
       label: "Email",
       count: items.filter((i) => i.type === "Email").length,
     },
-    {
-      id: "call",
+    showCall && {
+      id: "call" as const,
       label: "Calls",
       count: items.filter((i) => i.type === "Call").length,
     },
-    {
-      id: "linkedin",
+    showLinkedIn && {
+      id: "linkedin" as const,
       label: "LinkedIn",
       count: items.filter((i) => i.type === "LinkedIn").length,
     },
     {
-      id: "replied",
+      id: "replied" as const,
       label: "Replied",
       count: items.filter((i) => i.status === "Replied").length,
     },
-  ];
+  ].filter(Boolean) as { id: Filter; label: string; count: number }[];
 
   return (
-    <Card className="flex flex-col self-start w-full max-w-md">
-      <CardContent className="p-3 flex flex-col">
+    <Card className="flex flex-col h-full w-full">
+      <CardContent className="p-3 flex flex-col h-full min-h-0">
         <div className="flex items-center gap-2 mb-2">
           <Inbox className="h-3.5 w-3.5 text-muted-foreground" />
           <h3 className="text-xs font-semibold uppercase tracking-wider">
@@ -190,7 +209,7 @@ export function RecentActivityPanel({
           ))}
         </div>
 
-        <div className="max-h-80 overflow-auto -mx-1 px-1">
+        <div className="flex-1 min-h-0 overflow-auto -mx-1 px-1">
           {filtered.length === 0 ? (
             <p className="text-xs text-muted-foreground py-8 text-center">
               No activity yet

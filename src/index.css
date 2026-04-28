@@ -92,6 +92,14 @@ All colors MUST be HSL.
     --chart-3: 215 16% 46%;
     --chart-4: 219 8% 46%;
     --chart-5: 215 19% 34%;
+    /* C12: channel-specific tokens for analytics charts (light) */
+    --channel-email: 231 48% 55%;
+    --channel-call: 38 92% 50%;
+    --channel-linkedin: 266 85% 58%;
+    --channel-success: 142 71% 45%;
+    --channel-failed: 0 84% 60%;
+    --channel-opened: 199 89% 48%;
+    --channel-neutral: 215 16% 47%;
     --sidebar: 210 40% 98%;
     --font-sans: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
     --font-serif: 'Crimson Pro', ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
@@ -156,6 +164,14 @@ All colors MUST be HSL.
     --chart-3: 215 20% 65%;
     --chart-4: 217 10% 64%;
     --chart-5: 215 16% 46%;
+    /* C12: channel-specific tokens for analytics charts (dark — brighter for contrast on slate-900) */
+    --channel-email: 217 91% 65%;
+    --channel-call: 38 92% 60%;
+    --channel-linkedin: 266 85% 70%;
+    --channel-success: 142 71% 55%;
+    --channel-failed: 0 84% 65%;
+    --channel-opened: 199 89% 60%;
+    --channel-neutral: 215 20% 65%;
     --sidebar: 217 32% 17%;
     --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
     --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
@@ -529,3 +545,14 @@ All colors MUST be HSL.
 .always-show-scrollbars::-webkit-scrollbar-thumb:hover {
   background-color: hsl(var(--muted-foreground));
 }
+/* Rich email body rendering — applies to live preview and read-only views.
+   Tailwind's typography plugin isn't registered in tailwind.config.ts, so
+   `prose` classes are no-ops; these rules give <p>/<ul>/<ol> proper spacing. */
+.email-preview-body p { margin: 0 0 0.85em 0; }
+.email-preview-body p:last-child { margin-bottom: 0; }
+.email-preview-body ul,
+.email-preview-body ol { margin: 0 0 0.85em 1.25em; padding-left: 1rem; }
+.email-preview-body ul { list-style: disc; }
+.email-preview-body ol { list-style: decimal; }
+.email-preview-body li { margin: 0.15em 0; }
+.email-preview-body a { color: hsl(var(--primary)); text-decoration: underline; }
