@@ -765,10 +765,14 @@ Deno.serve(async (req) => {
           // chronology gate, which produces false negatives when Gmail/Outlook
           // bridges rotate the conversationId on cross-domain replies.
           let originalEmail: any = null;
+          // 60-second clock-skew tolerance: Outlook's `receivedDateTime` is
+          // sometimes recorded slightly before our DB writes the outbound's
+          // `communication_date` (the post-send insert is async).
+          const SKEW_MS = 60_000;
           if (
             headerAnchoredParent &&
             headerAnchoredParent.communication_date &&
-            new Date(headerAnchoredParent.communication_date).getTime() <= receivedTime &&
+            new Date(headerAnchoredParent.communication_date).getTime() <= receivedTime + SKEW_MS &&
             areSubjectsCompatible(msg.subject, headerAnchoredParent.subject)
           ) {
             // Re-load the full row from convEmails if it's in our bucket; else
@@ -787,10 +791,10 @@ Deno.serve(async (req) => {
           }
 
           if (!originalEmail) {
-            // CHRONOLOGY GATE (bucket-based fallback)
+            // CHRONOLOGY GATE (bucket-based fallback) — also tolerant to 60s skew.
             const chronologicalParents = convEmails.filter((o) => {
               const outTime = new Date(o.communication_date || 0).getTime();
-              return outTime <= receivedTime;
+              return outTime <= receivedTime + SKEW_MS;
             });
 
             if (chronologicalParents.length === 0) {
