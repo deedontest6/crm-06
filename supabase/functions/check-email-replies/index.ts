@@ -487,18 +487,29 @@ Deno.serve(async (req) => {
           const headerCandidateIds = [inReplyTo, ...referencesRaw.split(/\s+/)].filter(Boolean);
 
           let candidateBucketKeys: string[] = [];
+          // RFC 5322 header-anchored parent — when present, this is the AUTHORITATIVE
+          // parent for chronology, even if the inbound's conversationId got rotated
+          // by Gmail/Outlook bridges (a common cause of false "chronology" skips).
+          let headerAnchoredParent: { id: string; conversation_id: string | null; communication_date: string | null; subject: string | null } | null = null;
 
           // Step 1: header-based lookup against our outbound internet_message_id.
           if (headerCandidateIds.length > 0) {
             const { data: parentByHeader } = await supabase
               .from("campaign_communications")
-              .select("conversation_id, contact_id, campaign_id")
+              .select("id, conversation_id, contact_id, campaign_id, communication_date, subject")
               .in("internet_message_id", headerCandidateIds)
               .neq("sent_via", "graph-sync")
+              .order("communication_date", { ascending: true })
               .limit(1);
             const parent = (parentByHeader || [])[0];
             if (parent?.conversation_id) {
               candidateBucketKeys = bucketsByConvId.get(parent.conversation_id) || [];
+              headerAnchoredParent = {
+                id: parent.id,
+                conversation_id: parent.conversation_id,
+                communication_date: parent.communication_date || null,
+                subject: parent.subject || null,
+              };
             }
           }
 
