@@ -252,7 +252,7 @@ export async function sendEmailViaGraph(
   replyToInternetMessageId?: string,
   attachments?: GraphAttachment[],
   internetMessageHeaders?: InternetHeader[],
-  options?: { correlationToken?: string; previousReferences?: string },
+  options?: { correlationToken?: string; previousReferences?: string; parentMailbox?: string },
 ): Promise<SendEmailResult> {
   const senderMailbox = (fromEmail || senderEmail).trim();
   const encodedMailbox = encodeURIComponent(senderMailbox);
@@ -269,6 +269,15 @@ export async function sendEmailViaGraph(
   const correlationToken = options?.correlationToken || makeCorrelationToken();
   const finalHtmlBody = injectCorrelationMarker(htmlBody, correlationToken);
 
+  // === MAILBOX SELECTION FOR createReply ===
+  // The parent message lives in whichever mailbox originally sent it. If the
+  // parent was sent as a shared mailbox (e.g. crm@realthingks.com) but the
+  // current send is going through a user mailbox (e.g. user@realthingks.com),
+  // calling createReply against the user mailbox returns 403 ErrorAccessDenied
+  // because Graph can't find the message there. Use the parent's mailbox.
+  const replyMailbox = (options?.parentMailbox || senderMailbox).trim();
+  const encodedReplyMailbox = encodeURIComponent(replyMailbox);
+
   // Reply path A — auto-resolve graphMessageId from internetMessageId if the
   // caller didn't have it cached (handles the case where the original send's
   // metadata capture failed and we never stored graph_message_id).
@@ -276,7 +285,7 @@ export async function sendEmailViaGraph(
   if (!resolvedReplyGraphId && replyToInternetMessageId) {
     resolvedReplyGraphId = await findSentMessageGraphId(
       accessToken,
-      senderMailbox,
+      replyMailbox,
       replyToInternetMessageId,
       null,
     );
