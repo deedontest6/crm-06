@@ -429,9 +429,13 @@ export async function sendEmailViaGraph(
     }
   }
 
-  // Reply path B / new send: sendMail with In-Reply-To / References headers.
-  // Try STANDARD header names first (RFC 5322) — Gmail/Outlook honour these
-  // for threading. If Graph rejects them, retry with `x-` prefix.
+  // Reply path B / new send: sendMail with x-prefixed In-Reply-To / References.
+  // Note: Microsoft Graph's `sendMail` rejects standard RFC 5322 header names
+  // ("In-Reply-To", "References") as InvalidInternetMessageHeader and only
+  // accepts `x-` prefixed custom headers. Most mail clients (Gmail/Outlook)
+  // ignore `x-` prefixed variants for threading — which is why createReply
+  // (above) is the only reliable path for true thread continuity. We still
+  // include the x- headers as best-effort metadata for our own reply matcher.
   const sendUrl = `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/sendMail`;
   const baseAttachments = attachments && attachments.length > 0
     ? attachments.map((a) => ({
@@ -442,66 +446,33 @@ export async function sendEmailViaGraph(
       }))
     : undefined;
 
-  const buildSendPayload = (useXPrefix: boolean) => {
-    const message: Record<string, unknown> = {
-      subject: finalSubject,
-      body: { contentType: "HTML", content: finalHtmlBody },
-      toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
-    };
-    if (baseAttachments) message.attachments = baseAttachments;
-
-    const threadingHeaders = buildThreadingHeaders(
-      replyToInternetMessageId,
-      options?.previousReferences,
-      useXPrefix,
-    );
-    // Caller-supplied custom headers must keep `x-` prefix per Graph contract.
-    const callerHeaders = (internetMessageHeaders || []).map((h) => ({
-      name: h.name.startsWith("x-") || h.name.startsWith("X-") ? h.name : `x-${h.name}`,
-      value: h.value,
-    }));
-    const allHeaders = [...threadingHeaders, ...callerHeaders];
-    if (allHeaders.length > 0) message.internetMessageHeaders = allHeaders;
-    return { message, saveToSentItems: true };
+  const message: Record<string, unknown> = {
+    subject: finalSubject,
+    body: { contentType: "HTML", content: finalHtmlBody },
+    toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
   };
+  if (baseAttachments) message.attachments = baseAttachments;
 
-  // First try standard header names.
-  let sendResp = await fetch(sendUrl, {
+  const threadingHeaders = buildThreadingHeaders(
+    replyToInternetMessageId,
+    options?.previousReferences,
+    true, // always x-prefix; Graph rejects standard names
+  );
+  const callerHeaders = (internetMessageHeaders || []).map((h) => ({
+    name: h.name.startsWith("x-") || h.name.startsWith("X-") ? h.name : `x-${h.name}`,
+    value: h.value,
+  }));
+  const allHeaders = [...threadingHeaders, ...callerHeaders];
+  if (allHeaders.length > 0) message.internetMessageHeaders = allHeaders;
+
+  const sendResp = await fetch(sendUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(buildSendPayload(false)),
+    body: JSON.stringify({ message, saveToSentItems: true }),
   });
-
-  // Graph rejects non-`x-` custom headers with 400 ErrorInvalidInternetMessageHeader.
-  // Retry once with `x-` prefix as a compatibility fallback.
-  if (!sendResp.ok && replyToInternetMessageId) {
-    const firstErrText = await sendResp.text();
-    let isHeaderError = false;
-    try {
-      const parsed = JSON.parse(firstErrText);
-      const code = parsed?.error?.code || "";
-      const msg = parsed?.error?.message || "";
-      isHeaderError = /InvalidInternetMessageHeader|invalid header/i.test(`${code} ${msg}`);
-    } catch { /* ignore */ }
-
-    if (isHeaderError) {
-      console.warn(`Standard threading headers rejected by Graph; retrying with x- prefix.`);
-      sendResp = await fetch(sendUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(buildSendPayload(true)),
-      });
-    } else {
-      // Restore the original error response shape so the !ok branch below sees it.
-      sendResp = new Response(firstErrText, { status: sendResp.status });
-    }
-  }
 
   if (!sendResp.ok) {
     const errBody = await sendResp.text();
