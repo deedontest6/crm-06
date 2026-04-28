@@ -298,7 +298,7 @@ export async function sendEmailViaGraph(
   // thread together in Outlook AND Gmail.
   if (resolvedReplyGraphId) {
     try {
-      const createReplyUrl = `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${resolvedReplyGraphId}/createReply`;
+      const createReplyUrl = `https://graph.microsoft.com/v1.0/users/${encodedReplyMailbox}/messages/${resolvedReplyGraphId}/createReply`;
       const createResp = await fetch(createReplyUrl, {
         method: "POST",
         headers: {
@@ -325,7 +325,7 @@ export async function sendEmailViaGraph(
             }));
           }
           const patchResp = await fetch(
-            `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}`,
+            `https://graph.microsoft.com/v1.0/users/${encodedReplyMailbox}/messages/${draftId}`,
             {
               method: "PATCH",
               headers: {
@@ -337,16 +337,17 @@ export async function sendEmailViaGraph(
           );
           if (patchResp.ok) {
             const sendResp = await fetch(
-              `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}/send`,
+              `https://graph.microsoft.com/v1.0/users/${encodedReplyMailbox}/messages/${draftId}/send`,
               {
                 method: "POST",
                 headers: { Authorization: `Bearer ${accessToken}` },
               },
             );
             if (sendResp.ok) {
+              // Look up metadata in the mailbox where the reply was actually sent.
               const metadata = await fetchSentMessageMetadata(
                 accessToken,
-                senderMailbox,
+                replyMailbox,
                 finalSubject,
                 recipientEmail,
                 correlationToken,
@@ -369,7 +370,59 @@ export async function sendEmailViaGraph(
         }
       } else {
         const errBody = await createResp.text();
-        console.warn(`createReply failed (${createResp.status}); falling back to sendMail with headers. ${errBody}`);
+        console.warn(`createReply failed against ${replyMailbox} (${createResp.status}); falling back to sendMail with headers. ${errBody}`);
+        // If we tried the parent mailbox and got 403, try once more against the
+        // current sender mailbox (some tenants have permissions inverted).
+        if (createResp.status === 403 && replyMailbox.toLowerCase() !== senderMailbox.toLowerCase()) {
+          const retryUrl = `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${resolvedReplyGraphId}/createReply`;
+          const retryResp = await fetch(retryUrl, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          if (retryResp.ok) {
+            const draft = await retryResp.json();
+            const draftId = draft?.id;
+            if (draftId) {
+              const patchResp2 = await fetch(
+                `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}`,
+                {
+                  method: "PATCH",
+                  headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    subject: finalSubject,
+                    body: { contentType: "HTML", content: finalHtmlBody },
+                    toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
+                  }),
+                },
+              );
+              if (patchResp2.ok) {
+                const sendResp2 = await fetch(
+                  `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}/send`,
+                  { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } },
+                );
+                if (sendResp2.ok) {
+                  const metadata = await fetchSentMessageMetadata(
+                    accessToken, senderMailbox, finalSubject, recipientEmail, correlationToken,
+                  );
+                  return {
+                    success: true,
+                    graphMessageId: metadata.graphMessageId,
+                    internetMessageId: metadata.internetMessageId,
+                    conversationId: metadata.conversationId,
+                    sentAsUser: true,
+                  };
+                } else {
+                  await sendResp2.text();
+                }
+              } else {
+                await patchResp2.text();
+              }
+            }
+          } else {
+            await retryResp.text();
+          }
+        }
       }
     } catch (e) {
       console.warn("Native reply path threw, falling back to sendMail:", (e as Error).message);
