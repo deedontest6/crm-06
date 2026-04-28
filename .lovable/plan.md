@@ -1,52 +1,86 @@
-# Compose Email — recipient auto-collapse + Schedule fix
+## Email Threading & Reply Bugs — Diagnosis and Fix Plan
 
-## Problems observed
+I traced all four issues to the database and edge function logs for your `Campaign 28 April` test against `deedontest1@gmail.com`. Here's exactly what's happening and the fix for each.
 
-1. **Recipient list auto-collapses on every click.** In `EmailComposeModal.tsx` (lines 975–986), an effect runs on every change to `selectedContactIds` and collapses the list after 350 ms whenever there is no search text. So as soon as a user checks one box, the list snaps shut and they have to click "Edit" again to check the next person.
-2. **Schedule silently does nothing for bulk batches under the enqueue threshold.** The compose footer always shows the Schedule input for bulk (line 1490). But the send handler only routes through `enqueue-campaign-send` (which honours `scheduled_at` via the DB `claim_send_job_items` RPC) when `sendable.length >= campaignSettings.enqueueThreshold` (default **25**, line 648–650). For 1–24 recipients the code falls through to the per-recipient `send-campaign-email` loop (line 774+), which never reads `scheduledAt`. Result: the user picks a future time, clicks Send, and emails go out immediately.
-3. Minor: the auto-collapse also fights the user when they're actively typing in the search box (the effect's `if (!recipientSearch)` short-circuit means the moment they clear the search it collapses again).
+---
 
-## Changes (frontend only — `src/components/campaigns/EmailComposeModal.tsx`)
+### Issue 1 & 2 — Contact's reply not showing in app
 
-### A. Recipient auto-collapse → 10 s idle debounce
+**Root cause (confirmed in `email_reply_skip_log`):** the inbound reply *is* arriving in the mailbox and the cron *does* see it (`Got 11 inbox messages, 8 match tracked conversations`), but it gets dropped by the **chronology gate**:
 
-- Replace the existing effect (lines 975–986) with an **activity-based debounce**:
-  - Track the last interaction timestamp via a ref, updated whenever the user toggles a checkbox, types in the search field, clicks "All/Clear", or scrolls the recipient list.
-  - When the list is expanded and at least one recipient is selected, start a **10-second** timer that collapses the list. Any new interaction resets the timer.
-  - Never collapse while the search input has focus or contains text.
-  - Never collapse while the recipient list is being hovered (mouse over the scroll area).
-  - Keep the existing "expand again when selection drops to 0" behaviour.
-- Remove the immediate 350 ms collapse-on-pick — that's the root cause of the snap-shut feeling.
-- Manual "Collapse" / "Edit" toggle button keeps working unchanged.
+```
+skip_reason: chronology
+sender:  deedontest1@gmail.com
+subject: Re: Boosting TEST's Efficiency with Our New SaaS
+reason:  reply received before any outbound in bucket
+bucket_size: 1
+```
 
-### B. Subtle UX polish around the recipient header
+What happened in DB:
+1. We sent original email `543e13ba` at 20:18:59 with `conversationId=AIh5HThr…`
+2. The contact replied from Gmail. Gmail-to-Outlook routes the reply, but Outlook assigns it a **new** internal `conversationId=ABe0tHl7…` (Outlook frequently rotates conversationId for cross-domain replies — Gmail breaks Outlook's threading hash).
+3. We then sent our own follow-up `d24b6ea5` at 20:21:25, which Graph put on the new `ABe0tHl7…` conversation.
+4. The reply checker buckets by `conversationId`, finds only `d24b6ea5` (sent at 20:21) in that bucket, sees the inbound at 20:19 is *older* than the bucket's only outbound, and skips it as "received before any outbound."
 
-- Show a tiny muted hint "Auto-collapses after 10s of inactivity" next to the Collapse button only when the timer is armed (selection > 0, expanded, no active search/hover). Keeps the new behaviour discoverable without being noisy.
-- Cancel the timer when the modal closes or `mode` switches away from `bulk`.
+**Fix:** the chronology gate must use **header-based parent lookup** as the primary signal (already used for matching, but ignored for chronology). Specifically:
 
-### C. Schedule actually schedules (small batches too)
+- When `In-Reply-To` / `References` headers point to one of our sent `internet_message_id`s, treat THAT specific email as the parent — not the bucket of the rotated `conversationId`.
+- If the header-matched parent is older than the inbound, accept the reply (chronology satisfied).
+- Only fall back to the conversationId-bucket chronology when no header parent was found.
 
-- In the send handler (around line 648), change the routing rule:
-  - **If `scheduledAt` is set AND `mode === "bulk"` AND not in reply mode → always go through `enqueue-campaign-send`,** regardless of `sendable.length` vs `ENQUEUE_THRESHOLD`. The cron runner + `claim_send_job_items` already honour `j.scheduled_at`, so a single queued job at any size is enough.
-  - Otherwise keep the current threshold-based routing.
-- Add a guard: if `scheduledAt` is in the past (clock drift after the modal was open a while), block Send and toast "Scheduled time is in the past — pick a future time or clear the schedule."
-- Update the existing post-enqueue toast wording so the scheduled case reads "Scheduled N email(s) for <local time>. They'll be sent automatically." (already mostly there at line 741 — just confirm the text and keep the modal closeable).
-- Disable the Send button's label swap so it reads **"Schedule Send"** when `scheduledAt` is set, **"Send Email(s)"** otherwise. Visual cue that the click won't fire emails right now.
-- Recompute `scheduleMin` lazily on each render (or via a 30 s interval) so a modal left open for several minutes can't accept a "now-ish" value that's already in the past by the time Send is clicked. Currently `scheduleMin` is memoised on `[open]` only.
+This is the industry-standard Outlook/Gmail approach: RFC 5322 headers always win over per-mailstore conversationIds.
 
-### D. Out of scope
+---
 
-- No changes to edge functions, DB functions, or `useCampaignSettings`. Schedule honouring is already correct on the backend; the bug is purely the frontend bypassing the queue for small batches.
-- No changes to single-mode or reply-mode (schedule input isn't shown there).
+### Issue 3 — Replying from app creates a new thread for the contact
 
-## Files touched
+**Root cause:** confirmed from `campaign_communications` rows. Every "reply" send is getting a brand-new `conversationId` — `d24b6ea5`'s conv (`ABe0tHl7…`) differs from its parent `543e13ba`'s conv (`AIh5HThr…`). Two contributing problems:
 
-- `src/components/campaigns/EmailComposeModal.tsx` (only)
+a. **Subject mutation in compose modal** — the user can edit the subject before sending. In your screenshot the reply subject was changed to "Boosting TEST's Efficiency with Our New SaaS reply 2". Outlook *never* mutates a reply subject (only adds `Re:`), and Gmail uses subject equivalence to thread. Once the subject changes, Gmail starts a new thread on the contact's side regardless of `In-Reply-To` headers — exactly what you saw in image-25 (two separate threads in Gmail).
 
-## Verification
+b. **`createReply` not consistently invoked** — the native Graph `createReply` path is only used when `replyToGraphMessageId` resolves. For older parents (or when the original send's metadata capture race-conditioned), it falls through to `sendMail` with custom headers, and Gmail bridges then assign a fresh conversation.
 
-- Bulk compose, pick 2 recipients → list stays open; wait ~10 s without interaction → collapses. Click "Edit", check more → timer resets.
-- Type in search → no collapse; clear search → 10 s timer starts.
-- Bulk compose, pick 3 recipients, set Schedule to +10 min, click "Schedule Send" → toast confirms scheduled time; check `campaign_send_jobs` row has `scheduled_at` set and `status='queued'`; runner picks it up only after that time.
-- Same flow with 30 recipients (above threshold) → unchanged behaviour, still queued and scheduled.
-- Set Schedule to a past time (e.g., open modal, wait, then click Send) → blocked with clear toast.
+**Fix:**
+- In `EmailComposeModal.tsx`, when `isReplyMode === true`, **lock the subject field** to the parent's subject prefixed with `Re:` (read-only), exactly like Outlook. Show a small "Reply to: <subject>" caption above. Same for the recipient — already locked, keep that behavior.
+- In `send-campaign-email/index.ts`, in reply mode, **always** force the outgoing subject to `Re: <normalized parent subject>` server-side too (defense-in-depth, ignore client-supplied subject changes).
+- In `azure-email.ts`, when `createReply` fails or when no `replyToGraphMessageId` is available, fall back to `createReply` on the parent's `internet_message_id` via Graph search before resorting to plain `sendMail`. We already have `findSentMessageGraphId`; use it pre-flight in reply mode and abort the send with a clear error if the parent can't be resolved (better to surface "can't thread this reply" than silently break the contact's inbox).
+
+---
+
+### Issue 4 — Some messages won't collapse on click
+
+**Root cause (line 1665 of `CampaignCommunications.tsx`):**
+```ts
+const isExpanded = isLatest || expandedMessages.has(msg.id);
+```
+The latest message is **forced** expanded — `toggleMessageExpanded(msg.id)` flips the Set, but `isLatest` overrides it. So clicking the newest message's header never collapses it. Same bug if a thread has only one message.
+
+**Fix:** seed the latest message's id into `expandedMessages` once per thread (the seeding effect at line 1005 already does this), and remove the `isLatest ||` override so the user-toggle state is always honoured.
+
+```ts
+const isExpanded = expandedMessages.has(msg.id);
+```
+
+---
+
+### Files to change
+
+1. **`supabase/functions/check-email-replies/index.ts`** — make header-matched parent the chronology anchor (pass the resolved parent into the chronology check; only use bucket fallback when no header parent).
+2. **`supabase/functions/send-campaign-email/index.ts`** — server-side enforce `Re: <parent subject>` when `parent_id` is present; fail fast with a clear error if the parent's Graph message can't be resolved in reply mode.
+3. **`supabase/functions/_shared/azure-email.ts`** — when `replyToInternetMessageId` is provided but `findSentMessageGraphId` returns nothing, surface that as a hard failure in reply mode (don't silently degrade to a new thread).
+4. **`src/components/campaigns/EmailComposeModal.tsx`** — lock the subject input as read-only in reply mode, show parent subject as caption, ensure the value submitted is `Re: <parent subject>`.
+5. **`src/components/campaigns/CampaignCommunications.tsx`** — drop the `isLatest ||` force-expand override so the latest message is collapsible.
+
+### Out of scope
+
+- Backfilling/repairing already-broken threads (those rows keep their wrong conversationId; only future replies will thread correctly).
+- A "merge thread" UI for orphan inbound replies — manual mapping via the existing unmatched-replies queue still works.
+- LinkedIn / Phone threading — the bug is purely email.
+
+### Verification after fix
+
+1. Send a fresh email from a campaign to `deedontest1@gmail.com`.
+2. Reply from Gmail — within one cron tick (≤5 min) the inbound should appear in Monitoring with green "Auto-synced Reply" badge.
+3. Click Reply in app → confirm the subject field is locked to `Re: …` and submit.
+4. Check Gmail — the reply should land in the **same** Gmail thread (not a new one).
+5. Click the latest message header in Monitoring → it should collapse.

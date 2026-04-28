@@ -1662,7 +1662,7 @@ export function CampaignCommunications({ campaignId, isCampaignEnded, isReadOnly
                 <div className="flex-1 overflow-y-auto divide-y">
                   {selectedThread.messages.map((msg: any) => {
                     const isLatest = selectedThread.messages[0]?.id === msg.id;
-                    const isExpanded = isLatest || expandedMessages.has(msg.id);
+                    const isExpanded = expandedMessages.has(msg.id);
                     const showQuoted = expandedMessages.has(`${msg.id}-quoted`);
                     const showError = expandedMessages.has(`${msg.id}-error`);
                     const isInbound = msg.kind === "inbound-reply";

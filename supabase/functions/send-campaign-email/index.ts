@@ -543,6 +543,34 @@ Deno.serve(async (req) => {
           fallbackConversationId,
         );
       }
+
+      // === REPLY MODE: enforce subject parity with parent ===
+      // Outlook never mutates a reply subject (only adds "Re:"), and Gmail
+      // uses subject-equivalence to decide whether to thread. Any client-side
+      // subject change would land the reply in a fresh Gmail thread on the
+      // contact's side. Server-side enforcement is the only reliable guard.
+      if (parentForQuote?.subject) {
+        const parentSubject = parentForQuote.subject.trim();
+        const parentRoot = parentSubject.replace(/^\s*(re|fw|fwd)\s*:\s*/i, "").trim();
+        effectiveSubject = /^\s*re\s*:/i.test(parentSubject)
+          ? parentSubject
+          : `Re: ${parentRoot}`;
+      }
+
+      // === REPLY MODE: require resolvable Graph parent for native createReply ===
+      // If we can't resolve the parent's graphMessageId, sendMail with custom
+      // headers is a known-broken fallback for Gmail recipients (it creates a
+      // brand-new thread). Better to fail loudly than silently break threading.
+      if (!replyToGraphMessageId && !replyToInternetMessageId) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: "Cannot send reply: original email's Graph metadata is missing. Try sending as a new email instead.",
+          errorCode: "REPLY_PARENT_UNRESOLVABLE",
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // Threading headers are now built inside sendEmailViaGraph using

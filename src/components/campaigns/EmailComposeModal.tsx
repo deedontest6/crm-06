@@ -1391,11 +1391,18 @@ export function EmailComposeModal({ open, onOpenChange, campaignId, contacts: co
                 <Input
                   ref={subjectRef}
                   value={subject}
-                  onChange={e => setSubject(e.target.value)}
+                  onChange={e => { if (!isReplyMode) setSubject(e.target.value); }}
                   onFocus={() => setFocusedField("subject")}
                   placeholder="Email subject..."
                   className="h-8 text-sm"
+                  readOnly={isReplyMode}
+                  title={isReplyMode ? "Subject is locked in reply mode to keep the email in the same thread" : undefined}
                 />
+                {isReplyMode && (
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    Locked to keep the reply in the same email thread (Outlook behavior).
+                  </p>
+                )}
               </div>
             </div>
 
