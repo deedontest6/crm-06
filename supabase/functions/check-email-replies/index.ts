@@ -477,14 +477,33 @@ Deno.serve(async (req) => {
           // actually use for threading. Outlook's `conversationId` is internal
           // and can be rotated by Gmail/Outlook bridges, so we trust headers
           // first and fall back to conversationId.
-          const headerList: any[] = Array.isArray(msg.internetMessageHeaders) ? msg.internetMessageHeaders : [];
+          let headerList: any[] = Array.isArray(msg.internetMessageHeaders) ? msg.internetMessageHeaders : [];
+          // Graph's $select on the list endpoint sometimes returns an empty
+          // headers array; re-fetch per-message to guarantee header-anchored
+          // matching always has a chance to succeed.
+          if (headerList.length === 0 && msg.id) {
+            try {
+              headerList = await fetchMessageHeaders(accessToken, mailbox, msg.id);
+              msg.internetMessageHeaders = headerList;
+            } catch (_) { /* non-fatal */ }
+          }
           const headerVal = (name: string): string => {
             const h = headerList.find((x: any) => (x?.name || "").toLowerCase() === name.toLowerCase());
             return (h?.value || "").trim();
           };
           const inReplyTo = (msg.inReplyTo || headerVal("In-Reply-To") || headerVal("x-In-Reply-To") || "").trim();
           const referencesRaw = (headerVal("References") || headerVal("x-References") || "").trim();
-          const headerCandidateIds = [inReplyTo, ...referencesRaw.split(/\s+/)].filter(Boolean);
+          // Normalize: trim, ensure angle brackets, lowercase. Generate variants
+          // both with and without `<>` so the IN query matches either storage form.
+          const normalizeMsgId = (raw: string): string[] => {
+            const t = raw.trim();
+            if (!t) return [];
+            const stripped = t.replace(/^<|>$/g, "");
+            const wrapped = `<${stripped}>`;
+            return Array.from(new Set([t, stripped, wrapped]));
+          };
+          const rawIds = [inReplyTo, ...referencesRaw.split(/\s+/)].filter(Boolean);
+          const headerCandidateIds = Array.from(new Set(rawIds.flatMap(normalizeMsgId)));
 
           let candidateBucketKeys: string[] = [];
           // RFC 5322 header-anchored parent — when present, this is the AUTHORITATIVE
@@ -510,6 +529,48 @@ Deno.serve(async (req) => {
                 communication_date: parent.communication_date || null,
                 subject: parent.subject || null,
               };
+            }
+          }
+
+          // Step 1b: subject + contact + ±10min chronology rescue. When
+          // header-anchored lookup yields nothing (Gmail clients sometimes
+          // strip In-Reply-To on cross-domain replies, and Outlook's `x-`
+          // prefixed variants are ignored by most MUAs), fall back to a
+          // tight subject+contact+time-window match against our outbound rows.
+          if (!headerAnchoredParent && fromEmail) {
+            const receivedTimeMs = new Date(receivedAt).getTime();
+            const windowStart = new Date(receivedTimeMs - 10 * 60 * 1000).toISOString();
+            const windowEnd = new Date(receivedTimeMs + 60 * 1000).toISOString();
+            // Find contacts matching the sender email (cheap; usually 0-2 rows).
+            const { data: contactsBySender } = await supabase
+              .from("contacts")
+              .select("id")
+              .ilike("email", fromEmail)
+              .limit(5);
+            const contactIdsForSender = (contactsBySender || []).map((c: any) => c.id);
+            if (contactIdsForSender.length > 0) {
+              const { data: chronoCandidates } = await supabase
+                .from("campaign_communications")
+                .select("id, conversation_id, contact_id, campaign_id, communication_date, subject")
+                .in("contact_id", contactIdsForSender)
+                .eq("communication_type", "Email")
+                .in("sent_via", ["azure", "sequence_runner"])
+                .gte("communication_date", windowStart)
+                .lte("communication_date", windowEnd)
+                .order("communication_date", { ascending: false })
+                .limit(10);
+              const compatible = (chronoCandidates || []).find((c: any) =>
+                areSubjectsCompatible(msg.subject, c.subject || ""),
+              );
+              if (compatible?.conversation_id) {
+                candidateBucketKeys = bucketsByConvId.get(compatible.conversation_id) || candidateBucketKeys;
+                headerAnchoredParent = {
+                  id: compatible.id,
+                  conversation_id: compatible.conversation_id,
+                  communication_date: compatible.communication_date || null,
+                  subject: compatible.subject || null,
+                };
+              }
             }
           }
 
@@ -704,10 +765,14 @@ Deno.serve(async (req) => {
           // chronology gate, which produces false negatives when Gmail/Outlook
           // bridges rotate the conversationId on cross-domain replies.
           let originalEmail: any = null;
+          // 60-second clock-skew tolerance: Outlook's `receivedDateTime` is
+          // sometimes recorded slightly before our DB writes the outbound's
+          // `communication_date` (the post-send insert is async).
+          const SKEW_MS = 60_000;
           if (
             headerAnchoredParent &&
             headerAnchoredParent.communication_date &&
-            new Date(headerAnchoredParent.communication_date).getTime() <= receivedTime &&
+            new Date(headerAnchoredParent.communication_date).getTime() <= receivedTime + SKEW_MS &&
             areSubjectsCompatible(msg.subject, headerAnchoredParent.subject)
           ) {
             // Re-load the full row from convEmails if it's in our bucket; else
@@ -726,10 +791,10 @@ Deno.serve(async (req) => {
           }
 
           if (!originalEmail) {
-            // CHRONOLOGY GATE (bucket-based fallback)
+            // CHRONOLOGY GATE (bucket-based fallback) — also tolerant to 60s skew.
             const chronologicalParents = convEmails.filter((o) => {
               const outTime = new Date(o.communication_date || 0).getTime();
-              return outTime <= receivedTime;
+              return outTime <= receivedTime + SKEW_MS;
             });
 
             if (chronologicalParents.length === 0) {

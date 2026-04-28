@@ -252,7 +252,7 @@ export async function sendEmailViaGraph(
   replyToInternetMessageId?: string,
   attachments?: GraphAttachment[],
   internetMessageHeaders?: InternetHeader[],
-  options?: { correlationToken?: string; previousReferences?: string },
+  options?: { correlationToken?: string; previousReferences?: string; parentMailbox?: string },
 ): Promise<SendEmailResult> {
   const senderMailbox = (fromEmail || senderEmail).trim();
   const encodedMailbox = encodeURIComponent(senderMailbox);
@@ -269,6 +269,15 @@ export async function sendEmailViaGraph(
   const correlationToken = options?.correlationToken || makeCorrelationToken();
   const finalHtmlBody = injectCorrelationMarker(htmlBody, correlationToken);
 
+  // === MAILBOX SELECTION FOR createReply ===
+  // The parent message lives in whichever mailbox originally sent it. If the
+  // parent was sent as a shared mailbox (e.g. crm@realthingks.com) but the
+  // current send is going through a user mailbox (e.g. user@realthingks.com),
+  // calling createReply against the user mailbox returns 403 ErrorAccessDenied
+  // because Graph can't find the message there. Use the parent's mailbox.
+  const replyMailbox = (options?.parentMailbox || senderMailbox).trim();
+  const encodedReplyMailbox = encodeURIComponent(replyMailbox);
+
   // Reply path A — auto-resolve graphMessageId from internetMessageId if the
   // caller didn't have it cached (handles the case where the original send's
   // metadata capture failed and we never stored graph_message_id).
@@ -276,7 +285,7 @@ export async function sendEmailViaGraph(
   if (!resolvedReplyGraphId && replyToInternetMessageId) {
     resolvedReplyGraphId = await findSentMessageGraphId(
       accessToken,
-      senderMailbox,
+      replyMailbox,
       replyToInternetMessageId,
       null,
     );
@@ -289,7 +298,7 @@ export async function sendEmailViaGraph(
   // thread together in Outlook AND Gmail.
   if (resolvedReplyGraphId) {
     try {
-      const createReplyUrl = `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${resolvedReplyGraphId}/createReply`;
+      const createReplyUrl = `https://graph.microsoft.com/v1.0/users/${encodedReplyMailbox}/messages/${resolvedReplyGraphId}/createReply`;
       const createResp = await fetch(createReplyUrl, {
         method: "POST",
         headers: {
@@ -316,7 +325,7 @@ export async function sendEmailViaGraph(
             }));
           }
           const patchResp = await fetch(
-            `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}`,
+            `https://graph.microsoft.com/v1.0/users/${encodedReplyMailbox}/messages/${draftId}`,
             {
               method: "PATCH",
               headers: {
@@ -328,16 +337,17 @@ export async function sendEmailViaGraph(
           );
           if (patchResp.ok) {
             const sendResp = await fetch(
-              `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}/send`,
+              `https://graph.microsoft.com/v1.0/users/${encodedReplyMailbox}/messages/${draftId}/send`,
               {
                 method: "POST",
                 headers: { Authorization: `Bearer ${accessToken}` },
               },
             );
             if (sendResp.ok) {
+              // Look up metadata in the mailbox where the reply was actually sent.
               const metadata = await fetchSentMessageMetadata(
                 accessToken,
-                senderMailbox,
+                replyMailbox,
                 finalSubject,
                 recipientEmail,
                 correlationToken,
@@ -360,16 +370,72 @@ export async function sendEmailViaGraph(
         }
       } else {
         const errBody = await createResp.text();
-        console.warn(`createReply failed (${createResp.status}); falling back to sendMail with headers. ${errBody}`);
+        console.warn(`createReply failed against ${replyMailbox} (${createResp.status}); falling back to sendMail with headers. ${errBody}`);
+        // If we tried the parent mailbox and got 403, try once more against the
+        // current sender mailbox (some tenants have permissions inverted).
+        if (createResp.status === 403 && replyMailbox.toLowerCase() !== senderMailbox.toLowerCase()) {
+          const retryUrl = `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${resolvedReplyGraphId}/createReply`;
+          const retryResp = await fetch(retryUrl, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          if (retryResp.ok) {
+            const draft = await retryResp.json();
+            const draftId = draft?.id;
+            if (draftId) {
+              const patchResp2 = await fetch(
+                `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}`,
+                {
+                  method: "PATCH",
+                  headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    subject: finalSubject,
+                    body: { contentType: "HTML", content: finalHtmlBody },
+                    toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
+                  }),
+                },
+              );
+              if (patchResp2.ok) {
+                const sendResp2 = await fetch(
+                  `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/messages/${draftId}/send`,
+                  { method: "POST", headers: { Authorization: `Bearer ${accessToken}` } },
+                );
+                if (sendResp2.ok) {
+                  const metadata = await fetchSentMessageMetadata(
+                    accessToken, senderMailbox, finalSubject, recipientEmail, correlationToken,
+                  );
+                  return {
+                    success: true,
+                    graphMessageId: metadata.graphMessageId,
+                    internetMessageId: metadata.internetMessageId,
+                    conversationId: metadata.conversationId,
+                    sentAsUser: true,
+                  };
+                } else {
+                  await sendResp2.text();
+                }
+              } else {
+                await patchResp2.text();
+              }
+            }
+          } else {
+            await retryResp.text();
+          }
+        }
       }
     } catch (e) {
       console.warn("Native reply path threw, falling back to sendMail:", (e as Error).message);
     }
   }
 
-  // Reply path B / new send: sendMail with In-Reply-To / References headers.
-  // Try STANDARD header names first (RFC 5322) — Gmail/Outlook honour these
-  // for threading. If Graph rejects them, retry with `x-` prefix.
+  // Reply path B / new send: sendMail with x-prefixed In-Reply-To / References.
+  // Note: Microsoft Graph's `sendMail` rejects standard RFC 5322 header names
+  // ("In-Reply-To", "References") as InvalidInternetMessageHeader and only
+  // accepts `x-` prefixed custom headers. Most mail clients (Gmail/Outlook)
+  // ignore `x-` prefixed variants for threading — which is why createReply
+  // (above) is the only reliable path for true thread continuity. We still
+  // include the x- headers as best-effort metadata for our own reply matcher.
   const sendUrl = `https://graph.microsoft.com/v1.0/users/${encodedMailbox}/sendMail`;
   const baseAttachments = attachments && attachments.length > 0
     ? attachments.map((a) => ({
@@ -380,66 +446,33 @@ export async function sendEmailViaGraph(
       }))
     : undefined;
 
-  const buildSendPayload = (useXPrefix: boolean) => {
-    const message: Record<string, unknown> = {
-      subject: finalSubject,
-      body: { contentType: "HTML", content: finalHtmlBody },
-      toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
-    };
-    if (baseAttachments) message.attachments = baseAttachments;
-
-    const threadingHeaders = buildThreadingHeaders(
-      replyToInternetMessageId,
-      options?.previousReferences,
-      useXPrefix,
-    );
-    // Caller-supplied custom headers must keep `x-` prefix per Graph contract.
-    const callerHeaders = (internetMessageHeaders || []).map((h) => ({
-      name: h.name.startsWith("x-") || h.name.startsWith("X-") ? h.name : `x-${h.name}`,
-      value: h.value,
-    }));
-    const allHeaders = [...threadingHeaders, ...callerHeaders];
-    if (allHeaders.length > 0) message.internetMessageHeaders = allHeaders;
-    return { message, saveToSentItems: true };
+  const message: Record<string, unknown> = {
+    subject: finalSubject,
+    body: { contentType: "HTML", content: finalHtmlBody },
+    toRecipients: [{ emailAddress: { address: recipientEmail, name: recipientName } }],
   };
+  if (baseAttachments) message.attachments = baseAttachments;
 
-  // First try standard header names.
-  let sendResp = await fetch(sendUrl, {
+  const threadingHeaders = buildThreadingHeaders(
+    replyToInternetMessageId,
+    options?.previousReferences,
+    true, // always x-prefix; Graph rejects standard names
+  );
+  const callerHeaders = (internetMessageHeaders || []).map((h) => ({
+    name: h.name.startsWith("x-") || h.name.startsWith("X-") ? h.name : `x-${h.name}`,
+    value: h.value,
+  }));
+  const allHeaders = [...threadingHeaders, ...callerHeaders];
+  if (allHeaders.length > 0) message.internetMessageHeaders = allHeaders;
+
+  const sendResp = await fetch(sendUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(buildSendPayload(false)),
+    body: JSON.stringify({ message, saveToSentItems: true }),
   });
-
-  // Graph rejects non-`x-` custom headers with 400 ErrorInvalidInternetMessageHeader.
-  // Retry once with `x-` prefix as a compatibility fallback.
-  if (!sendResp.ok && replyToInternetMessageId) {
-    const firstErrText = await sendResp.text();
-    let isHeaderError = false;
-    try {
-      const parsed = JSON.parse(firstErrText);
-      const code = parsed?.error?.code || "";
-      const msg = parsed?.error?.message || "";
-      isHeaderError = /InvalidInternetMessageHeader|invalid header/i.test(`${code} ${msg}`);
-    } catch { /* ignore */ }
-
-    if (isHeaderError) {
-      console.warn(`Standard threading headers rejected by Graph; retrying with x- prefix.`);
-      sendResp = await fetch(sendUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(buildSendPayload(true)),
-      });
-    } else {
-      // Restore the original error response shape so the !ok branch below sees it.
-      sendResp = new Response(firstErrText, { status: sendResp.status });
-    }
-  }
 
   if (!sendResp.ok) {
     const errBody = await sendResp.text();

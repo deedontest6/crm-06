@@ -1,86 +1,69 @@
-## Email Threading & Reply Bugs — Diagnosis and Fix Plan
+# Fix: Contact Replies Not Detected
 
-I traced all four issues to the database and edge function logs for your `Campaign 28 April` test against `deedontest1@gmail.com`. Here's exactly what's happening and the fix for each.
+## Diagnosis (from logs + DB)
 
----
+I traced the issue end-to-end and found a chain of failures, not a single bug.
 
-### Issue 1 & 2 — Contact's reply not showing in app
+### What is happening
 
-**Root cause (confirmed in `email_reply_skip_log`):** the inbound reply *is* arriving in the mailbox and the cron *does* see it (`Got 11 inbox messages, 8 match tracked conversations`), but it gets dropped by the **chronology gate**:
+1. **Outlook silently rejects standard `In-Reply-To` headers.** Every send shows the warning:
+   `Standard threading headers rejected by Graph; retrying with x- prefix.`
+   The fallback uses `x-In-Reply-To` / `x-References` — but Gmail and Outlook **ignore `x-` prefixed headers** for threading. So every outbound goes out with **no threading headers the recipient can see**.
 
-```
-skip_reason: chronology
-sender:  deedontest1@gmail.com
-subject: Re: Boosting TEST's Efficiency with Our New SaaS
-reason:  reply received before any outbound in bucket
-bucket_size: 1
-```
+2. **Native `createReply` fails with 403 ErrorAccessDenied.** Logs show:
+   `createReply failed (403); falling back to sendMail with headers. ErrorAccessDenied`
+   This happens because the parent was sent as the shared mailbox `crm@realthingks.com` but the user `deepak.dongare@realthingks.com` is calling `createReply` against their own user mailbox endpoint. Graph can't find that message in the wrong mailbox → 403.
 
-What happened in DB:
-1. We sent original email `543e13ba` at 20:18:59 with `conversationId=AIh5HThr…`
-2. The contact replied from Gmail. Gmail-to-Outlook routes the reply, but Outlook assigns it a **new** internal `conversationId=ABe0tHl7…` (Outlook frequently rotates conversationId for cross-domain replies — Gmail breaks Outlook's threading hash).
-3. We then sent our own follow-up `d24b6ea5` at 20:21:25, which Graph put on the new `ABe0tHl7…` conversation.
-4. The reply checker buckets by `conversationId`, finds only `d24b6ea5` (sent at 20:21) in that bucket, sees the inbound at 20:19 is *older* than the bucket's only outbound, and skips it as "received before any outbound."
+3. **Each send creates a new `conversation_id`.** Because Outlook never sees a real `In-Reply-To`, it uses subject normalization. With slightly mutated subjects like "...reply 2" or new sends after replies, every send becomes a new Outlook conversation. The DB shows 5 outbounds with the same subject, each in a different `conversation_id`.
 
-**Fix:** the chronology gate must use **header-based parent lookup** as the primary signal (already used for matching, but ignored for chronology). Specifically:
+4. **Chronology gate kills the contact's reply.** `email_reply_skip_log` shows reply at 20:35:59 anchored to parent at 20:38:14 — i.e., the gate compared the reply against an outbound sent *3 minutes after* the reply (a different one in the rotated conversation bucket). The header-anchored fast path didn't save it because the inbound has no usable `In-Reply-To` (see #1) — so we fell through to bucket logic and skipped.
 
-- When `In-Reply-To` / `References` headers point to one of our sent `internet_message_id`s, treat THAT specific email as the parent — not the bucket of the rotated `conversationId`.
-- If the header-matched parent is older than the inbound, accept the reply (chronology satisfied).
-- Only fall back to the conversationId-bucket chronology when no header parent was found.
+5. **Some outbounds have `internet_message_id = NULL`** (e.g. the 19:22 / 19:48 rows), so even if a reply DID have In-Reply-To pointing at them, header lookup couldn't match. Cause: `fetchSentMessageMetadata` returns empty when Sent Items lookup loses the race against the cron.
 
-This is the industry-standard Outlook/Gmail approach: RFC 5322 headers always win over per-mailstore conversationIds.
+6. **UI message-collapse bug** (lower priority): the `9f1b2562` message in the screenshot shows only one outbound, but the user reported the same screen has un-collapsing items. The `expandedMessages` Set is seeded from initial render but never cleared on thread switch.
 
----
+## Fixes
 
-### Issue 3 — Replying from app creates a new thread for the contact
+### Edge function: `_shared/azure-email.ts`
 
-**Root cause:** confirmed from `campaign_communications` rows. Every "reply" send is getting a brand-new `conversationId` — `d24b6ea5`'s conv (`ABe0tHl7…`) differs from its parent `543e13ba`'s conv (`AIh5HThr…`). Two contributing problems:
+a. **Detect the shared-mailbox case before calling `createReply`.** If the parent was sent as a shared mailbox (`sentAsShared` / `parent.sender_email !== authenticated user`), call `createReply` against the **shared mailbox endpoint** (`/users/{shared}/messages/{id}/createReply`), not the user mailbox. This eliminates the 403.
 
-a. **Subject mutation in compose modal** — the user can edit the subject before sending. In your screenshot the reply subject was changed to "Boosting TEST's Efficiency with Our New SaaS reply 2". Outlook *never* mutates a reply subject (only adds `Re:`), and Gmail uses subject equivalence to thread. Once the subject changes, Gmail starts a new thread on the contact's side regardless of `In-Reply-To` headers — exactly what you saw in image-25 (two separate threads in Gmail).
+b. **Stop trying standard header names.** Microsoft Graph rejects `In-Reply-To` / `References` as "InvalidInternetMessageHeader" — only `x-` prefixed custom headers are accepted via `sendMail`. Skip the standard-name attempt to remove the noisy retry, and **rely on `createReply` (now fixed in (a)) as the only path that produces real RFC 5322 threading headers in the outbound message**.
 
-b. **`createReply` not consistently invoked** — the native Graph `createReply` path is only used when `replyToGraphMessageId` resolves. For older parents (or when the original send's metadata capture race-conditioned), it falls through to `sendMail` with custom headers, and Gmail bridges then assign a fresh conversation.
+c. **Hard-fail when both `createReply` paths fail.** Returning success after the `x-`-prefix fallback gives the false impression that threading worked. Instead, return `errorCode: "REPLY_THREADING_BROKEN"` so the UI surfaces it. (We already added `REPLY_PARENT_UNRESOLVABLE`; this is the runtime sibling.)
 
-**Fix:**
-- In `EmailComposeModal.tsx`, when `isReplyMode === true`, **lock the subject field** to the parent's subject prefixed with `Re:` (read-only), exactly like Outlook. Show a small "Reply to: <subject>" caption above. Same for the recipient — already locked, keep that behavior.
-- In `send-campaign-email/index.ts`, in reply mode, **always** force the outgoing subject to `Re: <normalized parent subject>` server-side too (defense-in-depth, ignore client-supplied subject changes).
-- In `azure-email.ts`, when `createReply` fails or when no `replyToGraphMessageId` is available, fall back to `createReply` on the parent's `internet_message_id` via Graph search before resorting to plain `sendMail`. We already have `findSentMessageGraphId`; use it pre-flight in reply mode and abort the send with a clear error if the parent can't be resolved (better to surface "can't thread this reply" than silently break the contact's inbox).
+d. **Persist `internet_message_id` reliably.** Extend `fetchSentMessageMetadata` retry budget for the no-correlation-token path and, if still empty after retries, do one final `findSentMessageGraphId` lookup using `conversationId` to recover the `internetMessageId` instead of storing NULL.
 
----
+### Edge function: `check-email-replies/index.ts`
 
-### Issue 4 — Some messages won't collapse on click
+e. **Always fetch `internetMessageHeaders` per-message when missing.** The list endpoint sometimes returns an empty `internetMessageHeaders` array even when the field is `$select`-ed. Currently we only re-fetch when `conversationId` doesn't match a tracked conversation (line 437). Move that re-fetch into the inner relevant-messages loop so we always have headers before doing header-anchored lookup.
 
-**Root cause (line 1665 of `CampaignCommunications.tsx`):**
-```ts
-const isExpanded = isLatest || expandedMessages.has(msg.id);
-```
-The latest message is **forced** expanded — `toggleMessageExpanded(msg.id)` flips the Set, but `isLatest` overrides it. So clicking the newest message's header never collapses it. Same bug if a thread has only one message.
+f. **Loosen header matching: strip `<>` and lowercase before comparing.** Some Graph payloads return `In-Reply-To` without angle brackets while we store `internet_message_id` with `<>`. Normalize both sides before the `IN` query.
 
-**Fix:** seed the latest message's id into `expandedMessages` once per thread (the seeding effect at line 1005 already does this), and remove the `isLatest ||` override so the user-toggle state is always honoured.
+g. **Add a subject + contact + ±10min chronology rescue.** When header-anchored lookup AND bucket-by-convId both fail to produce a parent within ±10 minutes, do one last lookup: same campaign + same contact + subject-compatible + outbound `communication_date` within ±10 min of `received_at`. This catches the case where Outlook rotated convId AND the reply has no usable `In-Reply-To`. Mark these matches with `match_method: "subject_chronology_rescue"` in metadata.
 
-```ts
-const isExpanded = expandedMessages.has(msg.id);
-```
+h. **Loosen the chronology gate by 60 seconds.** Allow `outTime <= receivedTime + 60_000` to account for Outlook's `receivedDateTime` being the inbox-arrival time (sometimes slightly *before* our `communication_date` is written by the post-send DB insert).
 
----
+### Send path: `send-campaign-email/index.ts`
 
-### Files to change
+i. **When sending a reply, prefer the parent's mailbox.** If `parentComm.sender_email` differs from the current user's mailbox, route the createReply call through the parent's mailbox (the user has Send-As on the shared mailbox per existing config). This pairs with fix (a).
 
-1. **`supabase/functions/check-email-replies/index.ts`** — make header-matched parent the chronology anchor (pass the resolved parent into the chronology check; only use bucket fallback when no header parent).
-2. **`supabase/functions/send-campaign-email/index.ts`** — server-side enforce `Re: <parent subject>` when `parent_id` is present; fail fast with a clear error if the parent's Graph message can't be resolved in reply mode.
-3. **`supabase/functions/_shared/azure-email.ts`** — when `replyToInternetMessageId` is provided but `findSentMessageGraphId` returns nothing, surface that as a hard failure in reply mode (don't silently degrade to a new thread).
-4. **`src/components/campaigns/EmailComposeModal.tsx`** — lock the subject input as read-only in reply mode, show parent subject as caption, ensure the value submitted is `Re: <parent subject>`.
-5. **`src/components/campaigns/CampaignCommunications.tsx`** — drop the `isLatest ||` force-expand override so the latest message is collapsible.
+j. **Never store NULL `internet_message_id` for `delivery_status='sent'` rows.** If metadata lookup fails, surface a warning and let the row be retried by the metadata back-fill cron rather than leaving NULL forever.
 
-### Out of scope
+### UI: `CampaignCommunications.tsx`
 
-- Backfilling/repairing already-broken threads (those rows keep their wrong conversationId; only future replies will thread correctly).
-- A "merge thread" UI for orphan inbound replies — manual mapping via the existing unmatched-replies queue still works.
-- LinkedIn / Phone threading — the bug is purely email.
+k. **Reset `expandedMessages` when thread changes.** On thread/conversation switch, clear the Set and re-seed only the latest message. Fixes the "some emails don't collapse" report.
 
-### Verification after fix
+## Validation
 
-1. Send a fresh email from a campaign to `deedontest1@gmail.com`.
-2. Reply from Gmail — within one cron tick (≤5 min) the inbound should appear in Monitoring with green "Auto-synced Reply" badge.
-3. Click Reply in app → confirm the subject field is locked to `Re: …` and submit.
-4. Check Gmail — the reply should land in the **same** Gmail thread (not a new one).
-5. Click the latest message header in Monitoring → it should collapse.
+After deploy:
+1. Manually invoke `check-email-replies` and confirm the existing 4 chronology-skipped replies in `email_reply_skip_log` are now ingested (header-fetch + rescue path).
+2. Send a fresh test reply from `deedontest1@gmail.com` and confirm it lands in the conversation reader.
+3. Reply from the app and confirm `email_send_log` shows `success` with non-null `internet_message_id` and the contact's mail client shows the message threaded under the original (not a new thread).
+4. Verify edge logs no longer contain the "Standard threading headers rejected" warning.
+5. Click to collapse the latest message in a thread and confirm it stays collapsed.
+
+## Out of scope (call out, not fixing here)
+
+- Backfilling NULL `internet_message_id` on the 3 historical rows — needs a one-shot SQL job; will offer separately.
+- Switching to Microsoft Graph subscription/webhook for inbox events instead of the 5-minute cron — bigger architectural change.

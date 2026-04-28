@@ -622,6 +622,11 @@ Deno.serve(async (req) => {
     // exactly what was tried (instead of just the last attempt).
     const attemptedMailboxes: string[] = [senderEmail];
 
+    // For replies, prefer routing createReply through the parent's mailbox.
+    // The parent message exists only in the mailbox that originally sent it,
+    // so calling createReply against any other mailbox returns 403.
+    const parentMailbox = (parentForQuote?.sender_email || "").trim() || undefined;
+
     let result = await sendEmailViaGraph(
       accessToken,
       mailboxEmail,
@@ -634,7 +639,7 @@ Deno.serve(async (req) => {
       replyToInternetMessageId,
       attachments,
       undefined,
-      { previousReferences: parentForQuote?.references || undefined },
+      { previousReferences: parentForQuote?.references || undefined, parentMailbox },
     );
 
     let sentAsShared = false;
@@ -665,7 +670,7 @@ Deno.serve(async (req) => {
         replyToInternetMessageId,
         attachments,
         undefined,
-        { previousReferences: parentForQuote?.references || undefined },
+        { previousReferences: parentForQuote?.references || undefined, parentMailbox },
       );
       sentAsShared = result.success;
     }
