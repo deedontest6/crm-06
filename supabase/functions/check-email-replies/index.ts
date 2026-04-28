@@ -698,68 +698,97 @@ Deno.serve(async (req) => {
           const convEmails = bucketByCompositeKey.get(chosenKey) || [];
           const receivedTime = new Date(receivedAt).getTime();
 
-          // CHRONOLOGY GATE
-          const chronologicalParents = convEmails.filter((o) => {
-            const outTime = new Date(o.communication_date || 0).getTime();
-            return outTime <= receivedTime;
-          });
-
-          if (chronologicalParents.length === 0) {
-            skipCounts.chronology++;
-            const newest = convEmails
-              .slice()
-              .sort((a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime())[0];
-            await logSkip(supabase, "chronology", {
-              campaign_id: chosenBucketSample?.campaign_id || null,
-              contact_id: chosenBucketSample?.contact_id || null,
-              contact_email: chosenBucketSample?.contact_email || null,
-              sender_email: fromEmail,
-              subject: msg.subject || null,
-              conversation_id: msg.conversationId,
-              received_at: receivedAt,
-              parent_communication_id: newest?.id || null,
-              parent_subject: newest?.subject || null,
-              parent_sent_at: newest?.communication_date || null,
-              correlation_id: correlationId,
-              details: { reason: "reply received before any outbound in bucket", bucket_size: convEmails.length },
-            });
-            continue;
+          // === HEADER-ANCHORED FAST PATH ===
+          // If In-Reply-To / References pointed at one of our outbound emails,
+          // treat THAT specific email as the parent — bypass the bucket-based
+          // chronology gate, which produces false negatives when Gmail/Outlook
+          // bridges rotate the conversationId on cross-domain replies.
+          let originalEmail: any = null;
+          if (
+            headerAnchoredParent &&
+            headerAnchoredParent.communication_date &&
+            new Date(headerAnchoredParent.communication_date).getTime() <= receivedTime &&
+            areSubjectsCompatible(msg.subject, headerAnchoredParent.subject)
+          ) {
+            // Re-load the full row from convEmails if it's in our bucket; else
+            // synthesize a parent record sufficient for the insert below.
+            const inBucket = convEmails.find((o) => o.id === headerAnchoredParent!.id);
+            if (inBucket) {
+              originalEmail = inBucket;
+            } else {
+              const { data: fullParent } = await supabase
+                .from("campaign_communications")
+                .select("id, campaign_id, contact_id, account_id, owner, created_by, subject, internet_message_id, communication_date")
+                .eq("id", headerAnchoredParent.id)
+                .maybeSingle();
+              if (fullParent) originalEmail = fullParent;
+            }
           }
 
-          // SUBJECT COMPATIBILITY GATE
-          const eligibleParents = chronologicalParents.filter((o) =>
-            areSubjectsCompatible(msg.subject, o.subject),
-          );
-
-          if (eligibleParents.length === 0) {
-            skipCounts.subject_mismatch++;
-            const newestChrono = chronologicalParents
-              .slice()
-              .sort((a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime())[0];
-            await logSkip(supabase, "subject_mismatch", {
-              campaign_id: chosenBucketSample?.campaign_id || null,
-              contact_id: chosenBucketSample?.contact_id || null,
-              contact_email: chosenBucketSample?.contact_email || null,
-              sender_email: fromEmail,
-              subject: msg.subject || null,
-              conversation_id: msg.conversationId,
-              received_at: receivedAt,
-              parent_communication_id: newestChrono?.id || null,
-              parent_subject: newestChrono?.subject || null,
-              parent_sent_at: newestChrono?.communication_date || null,
-              correlation_id: correlationId,
-              details: {
-                considered_parents: chronologicalParents.map((p) => ({
-                  id: p.id, subject: p.subject, sent_at: p.communication_date,
-                })),
-              },
+          if (!originalEmail) {
+            // CHRONOLOGY GATE (bucket-based fallback)
+            const chronologicalParents = convEmails.filter((o) => {
+              const outTime = new Date(o.communication_date || 0).getTime();
+              return outTime <= receivedTime;
             });
-            continue;
-          }
 
-          const originalEmail = eligibleParents.sort(
-            (a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime(),
-          )[0];
+            if (chronologicalParents.length === 0) {
+              skipCounts.chronology++;
+              const newest = convEmails
+                .slice()
+                .sort((a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime())[0];
+              await logSkip(supabase, "chronology", {
+                campaign_id: chosenBucketSample?.campaign_id || null,
+                contact_id: chosenBucketSample?.contact_id || null,
+                contact_email: chosenBucketSample?.contact_email || null,
+                sender_email: fromEmail,
+                subject: msg.subject || null,
+                conversation_id: msg.conversationId,
+                received_at: receivedAt,
+                parent_communication_id: newest?.id || null,
+                parent_subject: newest?.subject || null,
+                parent_sent_at: newest?.communication_date || null,
+                correlation_id: correlationId,
+                details: { reason: "reply received before any outbound in bucket", bucket_size: convEmails.length },
+              });
+              continue;
+            }
+
+            // SUBJECT COMPATIBILITY GATE
+            const eligibleParents = chronologicalParents.filter((o) =>
+              areSubjectsCompatible(msg.subject, o.subject),
+            );
+
+            if (eligibleParents.length === 0) {
+              skipCounts.subject_mismatch++;
+              const newestChrono = chronologicalParents
+                .slice()
+                .sort((a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime())[0];
+              await logSkip(supabase, "subject_mismatch", {
+                campaign_id: chosenBucketSample?.campaign_id || null,
+                contact_id: chosenBucketSample?.contact_id || null,
+                contact_email: chosenBucketSample?.contact_email || null,
+                sender_email: fromEmail,
+                subject: msg.subject || null,
+                conversation_id: msg.conversationId,
+                received_at: receivedAt,
+                parent_communication_id: newestChrono?.id || null,
+                parent_subject: newestChrono?.subject || null,
+                parent_sent_at: newestChrono?.communication_date || null,
+                correlation_id: correlationId,
+                details: {
+                  considered_parents: chronologicalParents.map((p) => ({
+                    id: p.id, subject: p.subject, sent_at: p.communication_date,
+                  })),
+                },
+              });
+              continue;
+            }
+
+            originalEmail = eligibleParents.sort(
+              (a, b) => new Date(b.communication_date || 0).getTime() - new Date(a.communication_date || 0).getTime(),
+            )[0];
+          }
 
           if (!originalEmail) {
             skipCounts.no_parent++;
